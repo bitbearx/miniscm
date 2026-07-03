@@ -4,7 +4,17 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
-import { getCommitFiles, getFileHistory, parseChangedFiles, parseCommitHistory, runGit } from '../src/gitHistory';
+import {
+  getCommitFiles,
+  getFileHistory,
+  getGitRefs,
+  getRepositoryFileInfo,
+  gitRefExists,
+  parseChangedFiles,
+  parseCommitHistory,
+  parseGitRefs,
+  runGit
+} from '../src/gitHistory';
 
 test('parseCommitHistory parses git log entries with renamed files', () => {
   const output = [
@@ -54,6 +64,24 @@ test('parseChangedFiles handles renamed paths with spaces', () => {
   ]);
 });
 
+test('parseGitRefs groups branches, remote branches, and tags', () => {
+  const output = [
+    'main\trefs/heads/main',
+    'feature/ref-compare\trefs/heads/feature/ref-compare',
+    'origin/main\trefs/remotes/origin/main',
+    'origin/HEAD\trefs/remotes/origin/HEAD',
+    'v1.0.0\trefs/tags/v1.0.0',
+    ''
+  ].join('\n');
+
+  assert.deepEqual(parseGitRefs(output), [
+    { label: 'feature/ref-compare', ref: 'refs/heads/feature/ref-compare', type: 'branch' },
+    { label: 'main', ref: 'refs/heads/main', type: 'branch' },
+    { label: 'origin/main', ref: 'refs/remotes/origin/main', type: 'remote' },
+    { label: 'v1.0.0', ref: 'refs/tags/v1.0.0', type: 'tag' }
+  ]);
+});
+
 test('getFileHistory reads real git history for a file', async () => {
   const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'miniscm-history-'));
   const filePath = path.join(repoRoot, 'src', 'hello.txt');
@@ -81,4 +109,53 @@ test('getFileHistory reads real git history for a file', async () => {
 
   const changedFiles = await getCommitFiles(repoRoot, history.commits[0].hash);
   assert.deepEqual(changedFiles, [{ status: 'M', path: 'src/hello.txt', oldPath: undefined }]);
+});
+
+test('getRepositoryFileInfo resolves repo root and relative path without file history', async () => {
+  const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'miniscm-file-info-'));
+  const filePath = path.join(repoRoot, 'src', 'draft.txt');
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  await fs.writeFile(filePath, 'draft\n', 'utf8');
+
+  await runGit(repoRoot, ['init']);
+
+  const fileInfo = await getRepositoryFileInfo(filePath);
+  assert.equal(fileInfo.repoRoot, await fs.realpath(repoRoot));
+  assert.equal(fileInfo.relativePath, 'src/draft.txt');
+});
+
+test('getGitRefs reads real branches and tags', async () => {
+  const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'miniscm-refs-'));
+  const filePath = path.join(repoRoot, 'hello.txt');
+
+  await runGit(repoRoot, ['init']);
+  await runGit(repoRoot, ['config', 'user.email', 'tester@example.com']);
+  await runGit(repoRoot, ['config', 'user.name', 'Test User']);
+  await fs.writeFile(filePath, 'hello\n', 'utf8');
+  await runGit(repoRoot, ['add', '.']);
+  await runGit(repoRoot, ['commit', '-m', 'Add hello file']);
+  await runGit(repoRoot, ['branch', 'feature/ref-compare']);
+  await runGit(repoRoot, ['tag', 'v1.0.0']);
+
+  const refs = await getGitRefs(repoRoot);
+
+  assert.ok(refs.some((ref) => ref.type === 'branch' && ref.ref === 'refs/heads/feature/ref-compare'));
+  assert.ok(refs.some((ref) => ref.type === 'tag' && ref.ref === 'refs/tags/v1.0.0'));
+});
+
+test('gitRefExists validates refs before opening a diff', async () => {
+  const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'miniscm-ref-exists-'));
+  const filePath = path.join(repoRoot, 'hello.txt');
+
+  await runGit(repoRoot, ['init']);
+  await runGit(repoRoot, ['config', 'user.email', 'tester@example.com']);
+  await runGit(repoRoot, ['config', 'user.name', 'Test User']);
+  await fs.writeFile(filePath, 'hello\n', 'utf8');
+  await runGit(repoRoot, ['add', '.']);
+  await runGit(repoRoot, ['commit', '-m', 'Add hello file']);
+  await runGit(repoRoot, ['tag', 'v1.0.0']);
+
+  assert.equal(await gitRefExists(repoRoot, 'HEAD'), true);
+  assert.equal(await gitRefExists(repoRoot, 'refs/tags/v1.0.0'), true);
+  assert.equal(await gitRefExists(repoRoot, 'missing-ref'), false);
 });

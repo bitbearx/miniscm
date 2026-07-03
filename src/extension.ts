@@ -6,21 +6,23 @@ import { buildFileTree } from './fileTree';
 import {
   getCommitFiles,
   getFileHistory,
+  getGitRefs,
+  getRepositoryFileInfo,
+  gitRefExists,
   runGit
 } from './gitHistory';
 import { createI18n, type I18n } from './i18n';
-import type { ChangedFile, FileHistoryResult } from './types';
+import { createRefDiffDescriptor } from './refDiff';
+import type { ChangedFile, FileHistoryResult, GitBlobEntry, GitRef, GitRefType } from './types';
 import { createHistoryHtml, type HistoryWebviewState } from './webview';
 
 const BLOB_SCHEME = 'miniscm-git';
 const EMPTY_REF = '__MINISCM_EMPTY__';
 
-/** 临时 Git blob 文档的读取参数。 */
-interface BlobEntry {
-  repoRoot: string;
-  ref: string;
-  relativePath: string;
-  label: string;
+/** QuickPick 中的 Git ref 选项。 */
+interface RefQuickPickItem extends vscode.QuickPickItem {
+  gitRef?: GitRef;
+  manual?: boolean;
 }
 
 /** Webview 发来的消息。 */
@@ -34,7 +36,7 @@ type WebviewMessage =
  * 为 VS Code diff 命令提供指定提交中的文件内容。
  */
 class GitBlobContentProvider implements vscode.TextDocumentContentProvider {
-  private readonly entries = new Map<string, BlobEntry>();
+  private readonly entries = new Map<string, GitBlobEntry>();
   private sequence = 0;
 
   /**
@@ -42,7 +44,7 @@ class GitBlobContentProvider implements vscode.TextDocumentContentProvider {
    * @param entry Git blob 的读取参数。
    * @returns 虚拟文档 URI。
    */
-  createUri(entry: BlobEntry): vscode.Uri {
+  createUri(entry: GitBlobEntry): vscode.Uri {
     const id = String((this.sequence += 1));
     this.entries.set(id, entry);
     const safeLabel = encodeURIComponent(entry.label.replaceAll('/', '-'));
@@ -106,6 +108,38 @@ class HistoryPanelManager {
   }
 
   /**
+   * 选择一个 Git ref，并将该 ref 下的文件与当前文件对比。
+   * @param resource 从资源管理器或编辑器菜单传入的文件 URI。
+   */
+  async compareFileWithRef(resource?: vscode.Uri): Promise<void> {
+    const target = this.resolveResource(resource);
+    if (!target) {
+      vscode.window.showWarningMessage(this.i18n.t('error.noFile'));
+      return;
+    }
+
+    if (target.scheme !== 'file') {
+      vscode.window.showWarningMessage(this.i18n.t('error.unsupportedScheme'));
+      return;
+    }
+
+    try {
+      const fileInfo = await getRepositoryFileInfo(target.fsPath);
+      const selectedRef = await this.pickGitRef(fileInfo.repoRoot);
+      if (!selectedRef) {
+        return;
+      }
+      if (!(await gitRefExists(fileInfo.repoRoot, selectedRef.ref))) {
+        vscode.window.showWarningMessage(this.i18n.t('error.invalidRef', selectedRef.label));
+        return;
+      }
+      await this.openRefDiff(fileInfo.repoRoot, fileInfo.relativePath, target, selectedRef);
+    } catch (error) {
+      vscode.window.showErrorMessage(`${this.i18n.t('error.loadRefs')} ${formatError(error)}`);
+    }
+  }
+
+  /**
    * 根据命令参数或当前编辑器推导目标文件。
    * @param resource 命令参数中的 URI。
    * @returns 目标文件 URI。
@@ -115,6 +149,51 @@ class HistoryPanelManager {
       return resource;
     }
     return vscode.window.activeTextEditor?.document.uri;
+  }
+
+  /**
+   * 让用户从仓库 refs 或手动输入中选择要对比的 ref。
+   * @param repoRoot Git 仓库根目录。
+   * @returns 用户选择的 ref。
+   */
+  private async pickGitRef(repoRoot: string): Promise<GitRef | undefined> {
+    const refs = await getGitRefs(repoRoot);
+    const manualItem: RefQuickPickItem = {
+      label: this.i18n.t('action.enterRef'),
+      description: this.i18n.t('placeholder.enterRef'),
+      alwaysShow: true,
+      manual: true
+    };
+    const items: RefQuickPickItem[] = [
+      ...refs.map((gitRef) => ({
+        label: gitRef.label,
+        description: this.i18n.t(getRefTypeMessageKey(gitRef.type)),
+        detail: gitRef.ref,
+        gitRef
+      })),
+      manualItem
+    ];
+
+    const selected = await vscode.window.showQuickPick(items, {
+      placeHolder: this.i18n.t('placeholder.selectRef'),
+      matchOnDescription: true,
+      matchOnDetail: true
+    });
+
+    if (!selected) {
+      return undefined;
+    }
+
+    if (!selected.manual) {
+      return selected.gitRef;
+    }
+
+    const input = await vscode.window.showInputBox({
+      prompt: this.i18n.t('placeholder.enterRef'),
+      placeHolder: 'main, v1.0.0, HEAD~1'
+    });
+    const ref = input?.trim();
+    return ref ? { label: ref, ref, type: 'branch' } : undefined;
   }
 
   /**
@@ -256,6 +335,25 @@ class HistoryPanelManager {
   }
 
   /**
+   * 打开所选 ref 下文件与当前工作区文件之间的差异。
+   * @param repoRoot Git 仓库根目录。
+   * @param relativePath 文件相对仓库根目录的路径。
+   * @param currentFile 当前工作区文件 URI。
+   * @param gitRef 用户选择的 Git ref。
+   */
+  private async openRefDiff(repoRoot: string, relativePath: string, currentFile: vscode.Uri, gitRef: GitRef): Promise<void> {
+    const descriptor = createRefDiffDescriptor(repoRoot, relativePath, currentFile.fsPath, gitRef);
+    const left = this.blobProvider.createUri(descriptor.left);
+
+    await vscode.commands.executeCommand(
+      'vscode.diff',
+      left,
+      currentFile,
+      this.i18n.t('title.compareRef', descriptor.titleFile, descriptor.titleRef)
+    );
+  }
+
+  /**
    * 获取提交的一父提交；根提交没有父提交时返回空文档标记。
    * @param repoRoot Git 仓库根目录。
    * @param commitHash 提交哈希。
@@ -280,6 +378,21 @@ function formatError(error: unknown): string {
 }
 
 /**
+ * 将 Git ref 类型转换为本地化文案 key。
+ * @param type Git ref 类型。
+ * @returns 本地化文案 key。
+ */
+function getRefTypeMessageKey(type: GitRefType): 'refType.branch' | 'refType.remote' | 'refType.tag' {
+  if (type === 'remote') {
+    return 'refType.remote';
+  }
+  if (type === 'tag') {
+    return 'refType.tag';
+  }
+  return 'refType.branch';
+}
+
+/**
  * VS Code 激活扩展时注册命令和虚拟文档提供器。
  * @param context 扩展上下文。
  */
@@ -292,6 +405,9 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.workspace.registerTextDocumentContentProvider(BLOB_SCHEME, blobProvider),
     vscode.commands.registerCommand('miniscm.showFileHistory', (resource?: vscode.Uri) => {
       void historyPanels.show(resource);
+    }),
+    vscode.commands.registerCommand('miniscm.compareFileWithRef', (resource?: vscode.Uri) => {
+      void historyPanels.compareFileWithRef(resource);
     })
   );
 }

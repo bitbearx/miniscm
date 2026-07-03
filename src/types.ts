@@ -40,3 +40,35 @@ export interface FileHistoryResult {
   relativePath: string;
   commits: CommitHistoryItem[];
 }
+
+/** 文件在 Git 仓库中的定位信息。 */
+export interface RepositoryFileInfo {
+  repoRoot: string;
+  relativePath: string;
+}
+
+/** 可用于对比的 Git 引用类型。 */
+export type GitRefType = 'branch' | 'remote' | 'tag';
+
+/** 可用于对比的 Git 引用。 */
+export interface GitRef {
+  label: string;
+  ref: string;
+  type: GitRefType;
+}
+
+/** 临时 Git blob 文档的读取参数。 */
+export interface GitBlobEntry {
+  repoRoot: string;
+  ref: string;
+  relativePath: string;
+  label: string;
+}
+
+/** 与指定 Git ref 对比时所需的 diff 输入描述。 */
+export interface RefDiffDescriptor {
+  left: GitBlobEntry;
+  rightPath: string;
+  titleFile: string;
+  titleRef: string;
+}

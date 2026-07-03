@@ -2,7 +2,7 @@ import { execFile } from 'node:child_process';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
-import type { ChangedFile, CommitHistoryItem, FileHistoryResult } from './types';
+import type { ChangedFile, CommitHistoryItem, FileHistoryResult, GitRef, GitRefType, RepositoryFileInfo } from './types';
 
 const COMMIT_SEPARATOR = '\x1e';
 const FIELD_SEPARATOR = '\x1f';
@@ -63,6 +63,28 @@ export function parseChangedFiles(output: string): ChangedFile[] {
 }
 
 /**
+ * 解析 git for-each-ref 输出为可选择的 ref 列表。
+ * @param output git for-each-ref 的原始文本输出。
+ * @returns 可用于对比的 Git 引用列表。
+ */
+export function parseGitRefs(output: string): GitRef[] {
+  return output
+    .split(/\r?\n/)
+    .map((line) => line.trimEnd())
+    .filter(Boolean)
+    .map((line) => {
+      const [label = '', fullRef = ''] = line.split('\t');
+      const type = getRefType(fullRef);
+      return type ? { label, ref: fullRef, type } : undefined;
+    })
+    .filter((ref): ref is GitRef => ref !== undefined && !ref.ref.endsWith('/HEAD'))
+    .sort((left, right) => {
+      const typeOrder: Record<GitRefType, number> = { branch: 0, remote: 1, tag: 2 };
+      return typeOrder[left.type] - typeOrder[right.type] || left.label.localeCompare(right.label);
+    });
+}
+
+/**
  * 在指定目录执行 Git 命令并返回标准输出。
  * @param cwd Git 命令的执行目录。
  * @param args Git 参数。
@@ -103,14 +125,26 @@ export function toGitRelativePath(repoRoot: string, filePath: string): string {
 }
 
 /**
+ * 获取文件所在仓库与相对路径，不读取提交历史。
+ * @param filePath 文件绝对路径。
+ * @returns 文件在 Git 仓库中的定位信息。
+ */
+export async function getRepositoryFileInfo(filePath: string): Promise<RepositoryFileInfo> {
+  const realFilePath = await fs.realpath(filePath);
+  const repoRoot = await findRepositoryRoot(realFilePath);
+  return {
+    repoRoot,
+    relativePath: toGitRelativePath(repoRoot, realFilePath)
+  };
+}
+
+/**
  * 获取指定文件的提交历史。
  * @param filePath 文件绝对路径。
  * @returns 文件历史数据。
  */
 export async function getFileHistory(filePath: string): Promise<FileHistoryResult> {
-  const realFilePath = await fs.realpath(filePath);
-  const repoRoot = await findRepositoryRoot(realFilePath);
-  const relativePath = toGitRelativePath(repoRoot, realFilePath);
+  const { repoRoot, relativePath } = await getRepositoryFileInfo(filePath);
   const output = await runGit(repoRoot, [
     'log',
     '--follow',
@@ -144,4 +178,54 @@ export async function getCommitFiles(repoRoot: string, commitHash: string): Prom
     commitHash
   ]);
   return parseChangedFiles(output);
+}
+
+/**
+ * 获取仓库中的本地分支、远程分支和标签。
+ * @param repoRoot Git 仓库根目录。
+ * @returns 可用于对比的 Git 引用列表。
+ */
+export async function getGitRefs(repoRoot: string): Promise<GitRef[]> {
+  const output = await runGit(repoRoot, [
+    'for-each-ref',
+    '--sort=refname',
+    '--format=%(refname:short)%09%(refname)',
+    'refs/heads',
+    'refs/remotes',
+    'refs/tags'
+  ]);
+  return parseGitRefs(output);
+}
+
+/**
+ * 判断 Git ref 是否能解析为可读取文件树的对象。
+ * @param repoRoot Git 仓库根目录。
+ * @param ref Git ref、分支名、标签名或提交表达式。
+ * @returns ref 是否有效。
+ */
+export async function gitRefExists(repoRoot: string, ref: string): Promise<boolean> {
+  try {
+    await runGit(repoRoot, ['rev-parse', '--verify', `${ref}^{tree}`]);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 根据完整 ref 名称判断引用类型。
+ * @param fullRef 完整 Git ref 名称。
+ * @returns 引用类型。
+ */
+function getRefType(fullRef: string): GitRefType | undefined {
+  if (fullRef.startsWith('refs/heads/')) {
+    return 'branch';
+  }
+  if (fullRef.startsWith('refs/remotes/')) {
+    return 'remote';
+  }
+  if (fullRef.startsWith('refs/tags/')) {
+    return 'tag';
+  }
+  return undefined;
 }

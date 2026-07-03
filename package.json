@@ -21,7 +21,8 @@
     "Source Control"
   ],
   "activationEvents": [
-    "onCommand:miniscm.showFileHistory"
+    "onCommand:miniscm.showFileHistory",
+    "onCommand:miniscm.compareFileWithRef"
   ],
   "main": "./out/src/extension.js",
   "contributes": {
@@ -31,6 +32,12 @@
         "title": "%command.showFileHistory%",
         "category": "%command.category%",
         "icon": "$(history)"
+      },
+      {
+        "command": "miniscm.compareFileWithRef",
+        "title": "%command.compareFileWithRef%",
+        "category": "%command.category%",
+        "icon": "$(git-compare)"
       }
     ],
     "menus": {
@@ -39,6 +46,11 @@
           "command": "miniscm.showFileHistory",
           "when": "resourceScheme == file && !explorerResourceIsFolder",
           "group": "navigation@20"
+        },
+        {
+          "command": "miniscm.compareFileWithRef",
+          "when": "resourceScheme == file && !explorerResourceIsFolder",
+          "group": "navigation@21"
         }
       ],
       "editor/context": [
@@ -46,6 +58,11 @@
           "command": "miniscm.showFileHistory",
           "when": "resourceScheme == file",
           "group": "navigation@20"
+        },
+        {
+          "command": "miniscm.compareFileWithRef",
+          "when": "resourceScheme == file",
+          "group": "navigation@21"
         }
       ]
     }
