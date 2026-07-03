@@ -36,7 +36,7 @@ npm run compile
 npx @vscode/vsce package --allow-missing-repository
 ```
 
-打包成功后会生成类似 `miniscm-0.0.1.vsix` 的文件。使用 VS Code 命令行安装：
+打包成功后会生成类似 `miniscm-0.0.1.vsix` 的文件。下面命令中的文件名请替换为实际生成的 VSIX 文件名：
 
 ```bash
 code --install-extension miniscm-0.0.1.vsix
