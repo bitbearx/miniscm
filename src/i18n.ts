@@ -2,6 +2,7 @@ const MESSAGES = {
   en: {
     'action.change': 'Change',
     'action.compareLatest': 'Compare with Latest',
+    'action.copyHash': 'Copy commit hash',
     'action.enterRef': 'Enter ref manually',
     'action.refresh': 'Refresh',
     'aria.loadFiles': 'Load changed files',
@@ -20,6 +21,7 @@ const MESSAGES = {
     'label.file': 'File',
     'label.loading': 'Loading...',
     'label.loadingFiles': 'Loading files...',
+    'label.merge': 'Merge',
     'label.path': 'Path',
     'placeholder.enterRef': 'Enter branch, tag, commit hash, or other ref',
     'placeholder.selectRef': 'Select a branch, tag, or ref to compare',
@@ -35,6 +37,7 @@ const MESSAGES = {
   zh: {
     'action.change': '变更',
     'action.compareLatest': '与最新版对比',
+    'action.copyHash': '复制提交哈希',
     'action.enterRef': '手动输入 Ref',
     'action.refresh': '刷新',
     'aria.loadFiles': '加载变更文件',
@@ -53,6 +56,7 @@ const MESSAGES = {
     'label.file': '文件',
     'label.loading': '加载中...',
     'label.loadingFiles': '正在加载文件...',
+    'label.merge': '合并',
     'label.path': '路径',
     'placeholder.enterRef': '输入分支、标签、提交哈希或其他 Ref',
     'placeholder.selectRef': '选择要对比的分支、标签或 Ref',

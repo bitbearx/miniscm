@@ -2,7 +2,7 @@ import path from 'node:path';
 
 import * as vscode from 'vscode';
 
-import { buildFileTree } from './fileTree';
+import { sortChangedFilesByDirectory } from './changedFiles';
 import {
   getCommitFiles,
   getFileHistory,
@@ -30,6 +30,7 @@ interface RefQuickPickItem extends vscode.QuickPickItem {
 type WebviewMessage =
   | { type: 'refresh' }
   | { type: 'loadCommitFiles'; commitHash: string }
+  | { type: 'copyCommitHash'; commitHash: string }
   | { type: 'showChange'; commitHash: string; file: ChangedFile }
   | { type: 'compareLatest'; commitHash: string; file: ChangedFile };
 
@@ -251,8 +252,13 @@ class HistoryPanelManager {
         await panel.webview.postMessage({
           type: 'commitFiles',
           commitHash: message.commitHash,
-          tree: buildFileTree(files)
+          files: sortChangedFilesByDirectory(files)
         });
+        return;
+      }
+
+      if (message.type === 'copyCommitHash') {
+        await vscode.env.clipboard.writeText(message.commitHash);
         return;
       }
 

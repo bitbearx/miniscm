@@ -1,6 +1,6 @@
 import type * as vscode from 'vscode';
 
-import type { CommitHistoryItem, FileTreeNode } from './types';
+import type { ChangedFile, CommitHistoryItem } from './types';
 import type { I18n } from './i18n';
 
 /** Webview 初始渲染所需的数据。 */
@@ -8,7 +8,7 @@ export interface HistoryWebviewState {
   fileName: string;
   relativePath: string;
   commits: CommitHistoryItem[];
-  filesByCommit: Record<string, FileTreeNode[]>;
+  filesByCommit: Record<string, ChangedFile[]>;
 }
 
 /**
@@ -45,6 +45,7 @@ export function createHistoryHtml(webview: vscode.Webview, state: HistoryWebview
   const labels = {
     actionChange: i18n.t('action.change'),
     actionCompareLatest: i18n.t('action.compareLatest'),
+    actionCopyHash: i18n.t('action.copyHash'),
     actionRefresh: i18n.t('action.refresh'),
     ariaLoadFiles: i18n.t('aria.loadFiles'),
     changedFiles: i18n.t('label.changedFiles'),
@@ -53,12 +54,12 @@ export function createHistoryHtml(webview: vscode.Webview, state: HistoryWebview
     emptyNoCommits: i18n.t('empty.noCommits'),
     file: i18n.t('label.file'),
     loadingFiles: i18n.t('label.loadingFiles'),
+    merge: i18n.t('label.merge'),
     path: i18n.t('label.path'),
     title: i18n.t('webview.title')
   };
 
   const bootState = serializeForScript({ ...state, labels });
-  const depthStyles = createDepthStyles(16);
 
   return /* html */ `<!DOCTYPE html>
 <html lang="${i18n.language}">
@@ -170,6 +171,7 @@ export function createHistoryHtml(webview: vscode.Webview, state: HistoryWebview
       background: transparent;
       border: 0;
       text-align: left;
+      cursor: pointer;
     }
 
     .commit-identity {
@@ -191,12 +193,42 @@ export function createHistoryHtml(webview: vscode.Webview, state: HistoryWebview
       font-size: 12px;
     }
 
+    .hash-copy {
+      flex: 0 0 auto;
+      margin: 0;
+      padding: 0;
+      color: var(--vscode-textLink-foreground);
+      background: transparent;
+      border: 0;
+      font: inherit;
+      cursor: copy;
+    }
+
+    .hash-copy:hover {
+      color: var(--vscode-textLink-activeForeground);
+      background: transparent;
+      text-decoration: underline;
+    }
+
     .commit-author {
       min-width: 0;
       color: var(--vscode-descriptionForeground);
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
+    }
+
+    .merge-badge {
+      flex: 0 0 auto;
+      padding: 1px 6px;
+      border-radius: 999px;
+      color: var(--vscode-descriptionForeground);
+      background: transparent;
+      border: 1px solid var(--vscode-panel-border);
+      font-size: 10px;
+      font-weight: 500;
+      line-height: 1.5;
+      opacity: 0.82;
     }
 
     .subject {
@@ -238,11 +270,7 @@ export function createHistoryHtml(webview: vscode.Webview, state: HistoryWebview
       color: var(--vscode-descriptionForeground);
     }
 
-    .tree-node {
-      min-width: 0;
-    }
-
-    .tree-line {
+    .file-row {
       display: grid;
       grid-template-columns: 1fr auto;
       align-items: center;
@@ -251,13 +279,11 @@ export function createHistoryHtml(webview: vscode.Webview, state: HistoryWebview
       padding: 2px 14px;
     }
 
-    ${depthStyles}
-
-    .tree-line:hover {
+    .file-row:hover {
       background: var(--vscode-list-hoverBackground);
     }
 
-    .node-label {
+    .file-main {
       min-width: 0;
       display: flex;
       align-items: center;
@@ -265,13 +291,7 @@ export function createHistoryHtml(webview: vscode.Webview, state: HistoryWebview
       overflow: hidden;
     }
 
-    .node-icon {
-      color: var(--vscode-descriptionForeground);
-      width: 14px;
-      flex: 0 0 14px;
-    }
-
-    .node-name {
+    .file-path-name {
       min-width: 0;
       overflow: hidden;
       text-overflow: ellipsis;
@@ -315,13 +335,13 @@ export function createHistoryHtml(webview: vscode.Webview, state: HistoryWebview
         text-align: left;
       }
 
-      .tree-line {
+      .file-row {
         grid-template-columns: 1fr;
         align-items: start;
       }
 
       .actions {
-        padding-left: 21px;
+        padding-left: 35px;
       }
     }
   </style>
@@ -351,7 +371,7 @@ export function createHistoryHtml(webview: vscode.Webview, state: HistoryWebview
     window.addEventListener('message', (event) => {
       const message = event.data;
       if (message.type === 'commitFiles') {
-        state.filesByCommit[message.commitHash] = message.tree;
+        state.filesByCommit[message.commitHash] = message.files;
         state.loadingCommit = undefined;
         render();
       }
@@ -384,8 +404,18 @@ export function createHistoryHtml(webview: vscode.Webview, state: HistoryWebview
       }
 
       app.innerHTML = state.commits.map(renderCommit).join('');
-      app.querySelectorAll('[data-commit]').forEach((button) => {
-        button.addEventListener('click', () => selectCommit(button.dataset.commit));
+      app.querySelectorAll('[data-commit]').forEach((row) => {
+        row.addEventListener('click', () => selectCommit(row.dataset.commit));
+        row.addEventListener('keydown', (event) => {
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            selectCommit(row.dataset.commit);
+          }
+        });
+      });
+      app.querySelectorAll('[data-action="copyHash"]').forEach((button) => {
+        button.addEventListener('click', copyCommitHash);
+        button.addEventListener('contextmenu', copyCommitHash);
       });
       app.querySelectorAll('[data-action="change"]').forEach((button) => {
         button.addEventListener('click', (event) => {
@@ -410,13 +440,32 @@ export function createHistoryHtml(webview: vscode.Webview, state: HistoryWebview
         : '';
 
       return '<section class="commit">' +
-        '<button class="commit-row ' + (active ? 'active' : '') + '" data-commit="' + escapeAttr(commit.hash) + '" aria-label="' + escapeAttr(state.labels.ariaLoadFiles) + '">' +
-          '<span class="commit-identity"><span class="hash">' + escapeHtml(commit.shortHash) + '</span><span class="commit-author">' + escapeHtml(commit.author) + '</span></span>' +
+        '<div class="commit-row ' + (active ? 'active' : '') + '" data-commit="' + escapeAttr(commit.hash) + '" role="button" tabindex="0" aria-label="' + escapeAttr(state.labels.ariaLoadFiles) + '">' +
+          '<span class="commit-identity">' + renderCommitHash(commit) + '<span class="commit-author">' + escapeHtml(commit.author) + '</span>' + renderMergeBadge(commit) + '</span>' +
           '<span class="subject">' + escapeHtml(commit.subject) + '</span>' +
           '<span class="meta">' + escapeHtml(meta) + '</span>' +
-        '</button>' +
+        '</div>' +
         fileArea +
       '</section>';
+    }
+
+    function copyCommitHash(event) {
+      event.preventDefault();
+      event.stopPropagation();
+      vscode.postMessage({ type: 'copyCommitHash', commitHash: event.currentTarget.dataset.commitHash });
+    }
+
+    function renderCommitHash(commit) {
+      return '<button class="hash-copy" data-action="copyHash" data-commit-hash="' + escapeAttr(commit.hash) + '" title="' + escapeAttr(state.labels.actionCopyHash) + '" aria-label="' + escapeAttr(state.labels.actionCopyHash) + '">' +
+        '<span class="hash">' + escapeHtml(commit.shortHash) + '</span>' +
+      '</button>';
+    }
+
+    function renderMergeBadge(commit) {
+      if (!commit.isMerge) {
+        return '';
+      }
+      return '<span class="merge-badge">' + escapeHtml(state.labels.merge) + '</span>';
     }
 
     function renderCommitMessage(commit) {
@@ -431,26 +480,17 @@ export function createHistoryHtml(webview: vscode.Webview, state: HistoryWebview
       if (state.loadingCommit === commitHash || !files) {
         return '<div class="loading">' + escapeHtml(state.labels.loadingFiles) + '</div>';
       }
-      return renderTree(files, commitHash, 0);
+      return renderFileRows(files, commitHash);
     }
 
-    function renderTree(nodes, commitHash, depth) {
-      return nodes.map((node) => {
-        if (node.type === 'folder') {
-          return '<div class="tree-node">' +
-            '<div class="tree-line ' + depthClass(depth) + '">' +
-              '<div class="node-label"><span class="node-icon">▾</span><span class="node-name">' + escapeHtml(node.name) + '</span></div>' +
-            '</div>' +
-            renderTree(node.children, commitHash, depth + 1) +
-          '</div>';
-        }
-
-        const fileData = escapeAttr(JSON.stringify(node.change));
-        return '<div class="tree-line ' + depthClass(depth) + '">' +
-          '<div class="node-label">' +
-            '<span class="node-icon">·</span>' +
-            '<span class="status">' + escapeHtml(node.change.status) + '</span>' +
-            '<span class="node-name" title="' + escapeAttr(node.path) + '">' + escapeHtml(node.name) + '</span>' +
+    // 将变更文件按行渲染，不再展示目录树节点。
+    function renderFileRows(files, commitHash) {
+      return sortChangedFilesByDirectory(files).map((file) => {
+        const fileData = escapeAttr(JSON.stringify(file));
+        return '<div class="file-row">' +
+          '<div class="file-main">' +
+            '<span class="status">' + escapeHtml(file.status) + '</span>' +
+            '<span class="file-path-name" title="' + escapeAttr(file.path) + '">' + escapeHtml(file.path) + '</span>' +
           '</div>' +
           '<div class="actions">' +
             '<button data-action="change" data-commit-hash="' + escapeAttr(commitHash) + '" data-file="' + fileData + '">' + escapeHtml(state.labels.actionChange) + '</button>' +
@@ -458,6 +498,35 @@ export function createHistoryHtml(webview: vscode.Webview, state: HistoryWebview
           '</div>' +
         '</div>';
       }).join('');
+    }
+
+    // 按目录路径和文件名排序，确保同目录文件连续显示。
+    function sortChangedFilesByDirectory(files) {
+      return [...files].sort((left, right) => {
+        const directoryCompare = getDirectoryPath(left.path).localeCompare(getDirectoryPath(right.path));
+        if (directoryCompare !== 0) {
+          return directoryCompare;
+        }
+
+        const fileNameCompare = getFileName(left.path).localeCompare(getFileName(right.path));
+        if (fileNameCompare !== 0) {
+          return fileNameCompare;
+        }
+
+        return left.path.localeCompare(right.path);
+      });
+    }
+
+    // 获取文件路径中的目录部分。
+    function getDirectoryPath(filePath) {
+      const separatorIndex = String(filePath || '').lastIndexOf('/');
+      return separatorIndex < 0 ? '' : filePath.slice(0, separatorIndex);
+    }
+
+    // 获取文件路径中的文件名部分。
+    function getFileName(filePath) {
+      const separatorIndex = String(filePath || '').lastIndexOf('/');
+      return separatorIndex < 0 ? filePath : filePath.slice(separatorIndex + 1);
     }
 
     function escapeHtml(value) {
@@ -471,10 +540,6 @@ export function createHistoryHtml(webview: vscode.Webview, state: HistoryWebview
 
     function escapeAttr(value) {
       return escapeHtml(value);
-    }
-
-    function depthClass(depth) {
-      return 'depth-' + Math.min(Math.max(Number(depth) || 0, 0), 16);
     }
 
     render();
@@ -495,16 +560,4 @@ function escapeHtml(value: unknown): string {
     .replaceAll('>', '&gt;')
     .replaceAll('"', '&quot;')
     .replaceAll("'", '&#39;');
-}
-
-/**
- * 生成有限层级的缩进 class，避免 Webview CSP 拦截内联 style。
- * @param maxDepth 允许的最大目录深度。
- * @returns CSS class 文本。
- */
-function createDepthStyles(maxDepth: number): string {
-  return Array.from({ length: maxDepth + 1 }, (_, depth) => {
-    const padding = 14 + depth * 18;
-    return `.tree-line.depth-${depth} { padding-left: ${padding}px; }`;
-  }).join('\n    ');
 }

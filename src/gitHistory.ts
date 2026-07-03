@@ -134,21 +134,26 @@ export async function getRepositoryFileInfo(filePath: string): Promise<Repositor
  */
 export async function getFileHistory(filePath: string): Promise<FileHistoryResult> {
   const { repoRoot, relativePath } = await getRepositoryFileInfo(filePath);
-  const output = await runGit(repoRoot, [
-    'log',
-    '--follow',
-    '--date=iso',
-    `--format=${COMMIT_SEPARATOR}%H${FIELD_SEPARATOR}%an${FIELD_SEPARATOR}%ad${FIELD_SEPARATOR}%B${FIELD_SEPARATOR}`,
-    '--name-status',
-    '--find-renames',
-    '--',
-    relativePath
+  const commonArgs = createFileHistoryArgs(relativePath);
+  const [fullHistoryOutput, followHistoryOutput] = await Promise.all([
+    runGit(repoRoot, commonArgs),
+    runGit(repoRoot, ['log', '--follow', ...commonArgs.slice(1)])
   ]);
+  const fullHistory = parseCommitHistory(fullHistoryOutput);
+  const followHistory = parseCommitHistory(followHistoryOutput);
+  const historicalPaths = getHistoricalFilePaths(relativePath, followHistory);
+  const historicalFullHistories = await Promise.all(
+    historicalPaths.map(async (historicalPath) => parseCommitHistory(await runGit(repoRoot, createFileHistoryArgs(historicalPath))))
+  );
 
   return {
     repoRoot,
     relativePath,
-    commits: parseCommitHistory(output)
+    commits: await filterMergeCommitsByPaths(
+      repoRoot,
+      [relativePath, ...historicalPaths],
+      mergeCommitHistories(fullHistory, ...historicalFullHistories, followHistory)
+    )
   };
 }
 
@@ -164,6 +169,7 @@ export async function getCommitFiles(repoRoot: string, commitHash: string): Prom
     '--format=',
     '--name-status',
     '--find-renames',
+    '--diff-merges=first-parent',
     commitHash
   ]);
   return parseChangedFiles(output);
@@ -220,6 +226,115 @@ function getRefType(fullRef: string): GitRefType | undefined {
 }
 
 /**
+ * 合并多条 Git 历史查询结果，并保留 Git 输出顺序。
+ * @param histories 多条提交历史列表。
+ * @returns 去重后的提交历史列表。
+ */
+function mergeCommitHistories(...histories: CommitHistoryItem[][]): CommitHistoryItem[] {
+  const commitsByHash = new Map<string, CommitHistoryItem>();
+  for (const history of histories) {
+    for (const commit of history) {
+      if (!commitsByHash.has(commit.hash)) {
+        commitsByHash.set(commit.hash, commit);
+      }
+    }
+  }
+  return [...commitsByHash.values()];
+}
+
+/**
+ * 创建查询单个文件历史的 Git 参数。
+ * @param relativePath 文件相对仓库根目录的路径。
+ * @returns Git log 参数列表。
+ */
+function createFileHistoryArgs(relativePath: string): string[] {
+  return [
+    'log',
+    '--full-history',
+    '--date=iso',
+    `--format=${COMMIT_SEPARATOR}%H${FIELD_SEPARATOR}%P${FIELD_SEPARATOR}%an${FIELD_SEPARATOR}%ad${FIELD_SEPARATOR}%B${FIELD_SEPARATOR}`,
+    '--name-status',
+    '--find-renames',
+    '--',
+    relativePath
+  ];
+}
+
+/**
+ * 从 follow 历史中收集当前文件曾经使用过的旧路径。
+ * @param relativePath 当前文件相对仓库根目录的路径。
+ * @param commits follow 查询得到的提交历史。
+ * @returns 去重后的历史路径列表。
+ */
+function getHistoricalFilePaths(relativePath: string, commits: CommitHistoryItem[]): string[] {
+  const paths = new Set<string>();
+  for (const commit of commits) {
+    for (const file of commit.files) {
+      if (file.status.startsWith('R') && file.oldPath && file.oldPath !== relativePath) {
+        paths.add(file.oldPath);
+      }
+    }
+  }
+  return [...paths];
+}
+
+/**
+ * 过滤掉 full-history 中没有实际改动当前文件任一路径的 merge commit。
+ * @param repoRoot Git 仓库根目录。
+ * @param relativePaths 文件当前路径及历史路径。
+ * @param commits 候选提交列表。
+ * @returns 过滤后的提交列表。
+ */
+async function filterMergeCommitsByPaths(
+  repoRoot: string,
+  relativePaths: string[],
+  commits: CommitHistoryItem[]
+): Promise<CommitHistoryItem[]> {
+  const checks = await Promise.all(
+    commits.map(async (commit) => ({
+      commit,
+      keep: !commit.isMerge || commit.files.length > 0 || (await mergeCommitTouchesAnyPath(repoRoot, relativePaths, commit.hash))
+    }))
+  );
+  return checks.filter((check) => check.keep).map((check) => check.commit);
+}
+
+/**
+ * 判断 merge commit 相对第一父提交是否实际改动了任一历史路径。
+ * @param repoRoot Git 仓库根目录。
+ * @param relativePaths 文件当前路径及历史路径。
+ * @param commitHash merge commit 哈希。
+ * @returns 是否改动任一路径。
+ */
+async function mergeCommitTouchesAnyPath(repoRoot: string, relativePaths: string[], commitHash: string): Promise<boolean> {
+  const results = await Promise.all(
+    relativePaths.map((relativePath) => mergeCommitTouchesPath(repoRoot, relativePath, commitHash))
+  );
+  return results.some(Boolean);
+}
+
+/**
+ * 判断 merge commit 相对第一父提交是否实际改动了指定文件。
+ * @param repoRoot Git 仓库根目录。
+ * @param relativePath 文件相对仓库根目录的路径。
+ * @param commitHash merge commit 哈希。
+ * @returns 是否改动指定文件。
+ */
+async function mergeCommitTouchesPath(repoRoot: string, relativePath: string, commitHash: string): Promise<boolean> {
+  const output = await runGit(repoRoot, [
+    'diff-tree',
+    '--no-commit-id',
+    '--name-status',
+    '-r',
+    '--diff-merges=first-parent',
+    commitHash,
+    '--',
+    relativePath
+  ]);
+  return parseChangedFiles(output).length > 0;
+}
+
+/**
  * 解析单个提交记录，兼容旧的单行 subject 格式和新的完整 message 格式。
  * @param entry 单个提交记录文本。
  * @returns 提交历史记录。
@@ -227,22 +342,53 @@ function getRefType(fullRef: string): GitRefType | undefined {
 function parseCommitEntry(entry: string): CommitHistoryItem {
   const [header, ...fileLines] = entry.split(/\r?\n/);
   const [hash = '', author = '', date = '', subject = ''] = header.split(FIELD_SEPARATOR);
+  const newFormatCommit = parseNewFormatCommitEntry(entry);
+  if (newFormatCommit) {
+    return newFormatCommit;
+  }
+
   const fullMessageStart = nthIndexOf(entry, FIELD_SEPARATOR, 3);
 
   if (fullMessageStart < 0) {
-    return createCommitHistoryItem(hash, author, date, subject, subject, fileLines.join('\n'));
+    return createCommitHistoryItem(hash, author, date, subject, subject, false, fileLines.join('\n'));
   }
 
   const messageAndFiles = entry.slice(fullMessageStart + FIELD_SEPARATOR.length);
   const messageEnd = messageAndFiles.indexOf(FIELD_SEPARATOR);
   if (messageEnd < 0) {
-    return createCommitHistoryItem(hash, author, date, subject, subject, fileLines.join('\n'));
+    return createCommitHistoryItem(hash, author, date, subject, subject, false, fileLines.join('\n'));
   }
 
   const message = messageAndFiles.slice(0, messageEnd).trimEnd();
   const files = messageAndFiles.slice(messageEnd + FIELD_SEPARATOR.length).replace(/^\r?\n/, '');
   const firstLine = message.split(/\r?\n/)[0] || subject;
-  return createCommitHistoryItem(hash, author, date, firstLine, message || firstLine, files);
+  return createCommitHistoryItem(hash, author, date, firstLine, message || firstLine, false, files);
+}
+
+/**
+ * 解析包含父提交列表的新格式提交记录。
+ * @param entry 单个提交记录文本。
+ * @returns 提交历史记录；不是新格式时返回 undefined。
+ */
+function parseNewFormatCommitEntry(entry: string): CommitHistoryItem | undefined {
+  const separatorPositions = getSeparatorPositions(entry, 5);
+  if (separatorPositions.length < 5) {
+    return undefined;
+  }
+
+  const [hashEnd, parentsEnd, authorEnd, dateEnd, messageEnd] = separatorPositions;
+  const hash = entry.slice(0, hashEnd);
+  const parents = entry.slice(hashEnd + 1, parentsEnd).trim();
+  if (!looksLikeParentList(parents)) {
+    return undefined;
+  }
+
+  const author = entry.slice(parentsEnd + 1, authorEnd);
+  const date = entry.slice(authorEnd + 1, dateEnd);
+  const message = entry.slice(dateEnd + 1, messageEnd).trimEnd();
+  const files = entry.slice(messageEnd + 1).replace(/^\r?\n/, '');
+  const firstLine = message.split(/\r?\n/)[0] || '';
+  return createCommitHistoryItem(hash, author, date, firstLine, message || firstLine, parents.split(/\s+/).length > 1, files);
 }
 
 /**
@@ -261,6 +407,7 @@ function createCommitHistoryItem(
   date: string,
   subject: string,
   message: string,
+  isMerge: boolean,
   filesOutput: string
 ): CommitHistoryItem {
   return {
@@ -270,8 +417,37 @@ function createCommitHistoryItem(
     date,
     subject,
     message,
+    isMerge,
     files: parseChangedFiles(filesOutput)
   };
+}
+
+/**
+ * 判断文本是否像 Git 父提交列表。
+ * @param value 待判断文本。
+ * @returns 是否为父提交列表。
+ */
+function looksLikeParentList(value: string): boolean {
+  return value === '' || /^[0-9a-fA-F]{4,}(?:\s+[0-9a-fA-F]{4,})*$/.test(value);
+}
+
+/**
+ * 获取前几个字段分隔符的位置。
+ * @param value 原始字符串。
+ * @param count 需要的位置数量。
+ * @returns 分隔符位置列表。
+ */
+function getSeparatorPositions(value: string, count: number): number[] {
+  const positions: number[] = [];
+  let position = -1;
+  for (let index = 0; index < count; index += 1) {
+    position = value.indexOf(FIELD_SEPARATOR, position + 1);
+    if (position < 0) {
+      break;
+    }
+    positions.push(position);
+  }
+  return positions;
 }
 
 /**
