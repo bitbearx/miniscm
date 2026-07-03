@@ -15,20 +15,9 @@ const FIELD_SEPARATOR = '\x1f';
 export function parseCommitHistory(output: string): CommitHistoryItem[] {
   return output
     .split(COMMIT_SEPARATOR)
-    .map((entry) => entry.trim())
+    .map((entry) => entry.replace(/^\r?\n/, '').trimEnd())
     .filter(Boolean)
-    .map((entry) => {
-      const [header, ...fileLines] = entry.split(/\r?\n/);
-      const [hash = '', author = '', date = '', subject = ''] = header.split(FIELD_SEPARATOR);
-      return {
-        hash,
-        shortHash: hash.slice(0, 8),
-        author,
-        date,
-        subject,
-        files: parseChangedFiles(fileLines.join('\n'))
-      };
-    });
+    .map(parseCommitEntry);
 }
 
 /**
@@ -149,7 +138,7 @@ export async function getFileHistory(filePath: string): Promise<FileHistoryResul
     'log',
     '--follow',
     '--date=iso',
-    `--format=${COMMIT_SEPARATOR}%H${FIELD_SEPARATOR}%an${FIELD_SEPARATOR}%ad${FIELD_SEPARATOR}%s`,
+    `--format=${COMMIT_SEPARATOR}%H${FIELD_SEPARATOR}%an${FIELD_SEPARATOR}%ad${FIELD_SEPARATOR}%B${FIELD_SEPARATOR}`,
     '--name-status',
     '--find-renames',
     '--',
@@ -228,4 +217,77 @@ function getRefType(fullRef: string): GitRefType | undefined {
     return 'tag';
   }
   return undefined;
+}
+
+/**
+ * 解析单个提交记录，兼容旧的单行 subject 格式和新的完整 message 格式。
+ * @param entry 单个提交记录文本。
+ * @returns 提交历史记录。
+ */
+function parseCommitEntry(entry: string): CommitHistoryItem {
+  const [header, ...fileLines] = entry.split(/\r?\n/);
+  const [hash = '', author = '', date = '', subject = ''] = header.split(FIELD_SEPARATOR);
+  const fullMessageStart = nthIndexOf(entry, FIELD_SEPARATOR, 3);
+
+  if (fullMessageStart < 0) {
+    return createCommitHistoryItem(hash, author, date, subject, subject, fileLines.join('\n'));
+  }
+
+  const messageAndFiles = entry.slice(fullMessageStart + FIELD_SEPARATOR.length);
+  const messageEnd = messageAndFiles.indexOf(FIELD_SEPARATOR);
+  if (messageEnd < 0) {
+    return createCommitHistoryItem(hash, author, date, subject, subject, fileLines.join('\n'));
+  }
+
+  const message = messageAndFiles.slice(0, messageEnd).trimEnd();
+  const files = messageAndFiles.slice(messageEnd + FIELD_SEPARATOR.length).replace(/^\r?\n/, '');
+  const firstLine = message.split(/\r?\n/)[0] || subject;
+  return createCommitHistoryItem(hash, author, date, firstLine, message || firstLine, files);
+}
+
+/**
+ * 创建统一的提交历史对象。
+ * @param hash 提交哈希。
+ * @param author 提交人。
+ * @param date 提交日期。
+ * @param subject 提交标题。
+ * @param message 完整提交描述。
+ * @param filesOutput 文件变更输出。
+ * @returns 提交历史对象。
+ */
+function createCommitHistoryItem(
+  hash: string,
+  author: string,
+  date: string,
+  subject: string,
+  message: string,
+  filesOutput: string
+): CommitHistoryItem {
+  return {
+    hash,
+    shortHash: hash.slice(0, 8),
+    author,
+    date,
+    subject,
+    message,
+    files: parseChangedFiles(filesOutput)
+  };
+}
+
+/**
+ * 查找字符串中第 n 次出现的子串位置。
+ * @param value 原始字符串。
+ * @param search 子串。
+ * @param occurrence 第几次出现，从 1 开始。
+ * @returns 子串位置，未找到时为 -1。
+ */
+function nthIndexOf(value: string, search: string, occurrence: number): number {
+  let position = -1;
+  for (let index = 0; index < occurrence; index += 1) {
+    position = value.indexOf(search, position + 1);
+    if (position < 0) {
+      return -1;
+    }
+  }
+  return position;
 }

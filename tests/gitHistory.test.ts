@@ -33,6 +33,7 @@ test('parseCommitHistory parses git log entries with renamed files', () => {
       author: 'Alice',
       date: '2026-07-02 10:11:12 +0800',
       subject: 'Update docs',
+      message: 'Update docs',
       files: [
         { status: 'M', path: 'README.md', oldPath: undefined },
         { status: 'R100', path: 'src/new.js', oldPath: 'src/old.js' }
@@ -44,7 +45,31 @@ test('parseCommitHistory parses git log entries with renamed files', () => {
       author: 'Bob',
       date: '2026-07-01 09:00:00 +0800',
       subject: 'Initial file',
+      message: 'Initial file',
       files: [{ status: 'A', path: 'src/new.js', oldPath: undefined }]
+    }
+  ]);
+});
+
+test('parseCommitHistory preserves multi-line commit descriptions before file changes', () => {
+  const output = [
+    '\x1eabc123\x1fAlice\x1f2026-07-02 10:11:12 +0800\x1fUpdate docs',
+    '',
+    'Explain the motivation.',
+    'Keep the second paragraph visible.\x1f',
+    'M\tREADME.md',
+    ''
+  ].join('\n');
+
+  assert.deepEqual(parseCommitHistory(output), [
+    {
+      hash: 'abc123',
+      shortHash: 'abc123',
+      author: 'Alice',
+      date: '2026-07-02 10:11:12 +0800',
+      subject: 'Update docs',
+      message: 'Update docs\n\nExplain the motivation.\nKeep the second paragraph visible.',
+      files: [{ status: 'M', path: 'README.md', oldPath: undefined }]
     }
   ]);
 });
@@ -97,7 +122,7 @@ test('getFileHistory reads real git history for a file', async () => {
 
   await fs.writeFile(filePath, 'hello\nworld\n', 'utf8');
   await runGit(repoRoot, ['add', '.']);
-  await runGit(repoRoot, ['commit', '-m', 'Update hello file']);
+  await runGit(repoRoot, ['commit', '-m', 'Update hello file', '-m', 'Explain the motivation.']);
 
   const history = await getFileHistory(filePath);
   assert.equal(history.repoRoot, await fs.realpath(repoRoot));
@@ -105,6 +130,10 @@ test('getFileHistory reads real git history for a file', async () => {
   assert.deepEqual(
     history.commits.map((commit) => commit.subject),
     ['Update hello file', 'Add hello file']
+  );
+  assert.deepEqual(
+    history.commits.map((commit) => commit.message),
+    ['Update hello file\n\nExplain the motivation.', 'Add hello file']
   );
 
   const changedFiles = await getCommitFiles(repoRoot, history.commits[0].hash);

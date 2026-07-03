@@ -12,6 +12,7 @@ export interface CommitHistoryItem {
   author: string;
   date: string;
   subject: string;
+  message: string;
   files: ChangedFile[];
 }
 

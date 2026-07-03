@@ -12,6 +12,7 @@ import {
   runGit
 } from './gitHistory';
 import { createI18n, type I18n } from './i18n';
+import { createHistoryPanelOptions } from './panelOptions';
 import { createRefDiffDescriptor } from './refDiff';
 import type { ChangedFile, FileHistoryResult, GitBlobEntry, GitRef, GitRefType } from './types';
 import { createHistoryHtml, type HistoryWebviewState } from './webview';
@@ -203,10 +204,12 @@ class HistoryPanelManager {
    */
   private openPanel(target: vscode.Uri, history: FileHistoryResult): void {
     const title = this.i18n.t('panel.title', path.basename(target.fsPath));
-    const panel = vscode.window.createWebviewPanel('miniscm.fileHistory', title, vscode.ViewColumn.Beside, {
-      enableScripts: true,
-      localResourceRoots: [this.context.extensionUri]
-    });
+    const panel = vscode.window.createWebviewPanel(
+      'miniscm.fileHistory',
+      title,
+      vscode.ViewColumn.Beside,
+      createHistoryPanelOptions(this.context.extensionUri)
+    );
 
     const state: HistoryWebviewState = {
       fileName: path.basename(target.fsPath),

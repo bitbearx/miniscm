@@ -162,7 +162,7 @@ export function createHistoryHtml(webview: vscode.Webview, state: HistoryWebview
     .commit-row {
       width: 100%;
       display: grid;
-      grid-template-columns: minmax(72px, 92px) minmax(180px, 1fr) minmax(170px, 220px);
+      grid-template-columns: minmax(160px, 240px) minmax(180px, 1fr) minmax(140px, 200px);
       align-items: center;
       gap: 12px;
       padding: 9px 14px;
@@ -170,6 +170,14 @@ export function createHistoryHtml(webview: vscode.Webview, state: HistoryWebview
       background: transparent;
       border: 0;
       text-align: left;
+    }
+
+    .commit-identity {
+      min-width: 0;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      overflow: hidden;
     }
 
     .commit-row:hover,
@@ -181,6 +189,14 @@ export function createHistoryHtml(webview: vscode.Webview, state: HistoryWebview
       color: var(--vscode-textLink-foreground);
       font-family: var(--vscode-editor-font-family);
       font-size: 12px;
+    }
+
+    .commit-author {
+      min-width: 0;
+      color: var(--vscode-descriptionForeground);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
 
     .subject {
@@ -199,6 +215,16 @@ export function createHistoryHtml(webview: vscode.Webview, state: HistoryWebview
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
+    }
+
+    .commit-message {
+      padding: 10px 14px 8px 14px;
+      color: var(--vscode-foreground);
+      background: var(--vscode-editorWidget-background);
+      border-top: 1px solid var(--vscode-panel-border);
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      line-height: 1.45;
     }
 
     .files {
@@ -282,11 +308,10 @@ export function createHistoryHtml(webview: vscode.Webview, state: HistoryWebview
 
     @media (max-width: 680px) {
       .commit-row {
-        grid-template-columns: 74px 1fr;
+        grid-template-columns: 1fr;
       }
 
       .meta {
-        grid-column: 2;
         text-align: left;
       }
 
@@ -379,19 +404,27 @@ export function createHistoryHtml(webview: vscode.Webview, state: HistoryWebview
     function renderCommit(commit) {
       const active = state.activeCommit === commit.hash;
       const files = state.filesByCommit[commit.hash];
-      const meta = commit.author + ' · ' + commit.date;
+      const meta = commit.date;
       const fileArea = active
-        ? '<div class="files">' + renderFiles(commit.hash, files) + '</div>'
+        ? renderCommitMessage(commit) + '<div class="files">' + renderFiles(commit.hash, files) + '</div>'
         : '';
 
       return '<section class="commit">' +
         '<button class="commit-row ' + (active ? 'active' : '') + '" data-commit="' + escapeAttr(commit.hash) + '" aria-label="' + escapeAttr(state.labels.ariaLoadFiles) + '">' +
-          '<span class="hash">' + escapeHtml(commit.shortHash) + '</span>' +
+          '<span class="commit-identity"><span class="hash">' + escapeHtml(commit.shortHash) + '</span><span class="commit-author">' + escapeHtml(commit.author) + '</span></span>' +
           '<span class="subject">' + escapeHtml(commit.subject) + '</span>' +
           '<span class="meta">' + escapeHtml(meta) + '</span>' +
         '</button>' +
         fileArea +
       '</section>';
+    }
+
+    function renderCommitMessage(commit) {
+      const message = String(commit.message || commit.subject || '').trim();
+      if (!message || message === commit.subject) {
+        return '';
+      }
+      return '<div class="commit-message">' + escapeHtml(message) + '</div>';
     }
 
     function renderFiles(commitHash, files) {
