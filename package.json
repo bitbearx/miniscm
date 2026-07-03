@@ -1,0 +1,65 @@
+{
+  "name": "miniscm",
+  "displayName": "%extension.displayName%",
+  "description": "%extension.description%",
+  "version": "0.0.1",
+  "publisher": "bitbearx",
+  "license": "MIT",
+  "files": [
+    "out/src",
+    "package.nls.json",
+    "package.nls.zh-cn.json",
+    "README.md"
+  ],
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "extensionKind": [
+    "workspace"
+  ],
+  "categories": [
+    "Source Control"
+  ],
+  "activationEvents": [
+    "onCommand:miniscm.showFileHistory"
+  ],
+  "main": "./out/src/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "miniscm.showFileHistory",
+        "title": "%command.showFileHistory%",
+        "category": "%command.category%",
+        "icon": "$(history)"
+      }
+    ],
+    "menus": {
+      "explorer/context": [
+        {
+          "command": "miniscm.showFileHistory",
+          "when": "resourceScheme == file && !explorerResourceIsFolder",
+          "group": "navigation@20"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "miniscm.showFileHistory",
+          "when": "resourceScheme == file",
+          "group": "navigation@20"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "prepack": "npm run compile",
+    "watch": "tsc -watch -p ./",
+    "test": "npm run compile && node --test out/tests/*.test.js",
+    "vscode:prepublish": "npm run compile"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.0",
+    "@types/vscode": "1.85.0",
+    "typescript": "^5.7.3"
+  }
+}

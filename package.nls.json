@@ -1,0 +1,6 @@
+{
+  "extension.displayName": "Mini SCM History",
+  "extension.description": "Browse a file's Git commit history and compare changed files from a right-click menu.",
+  "command.category": "Mini SCM",
+  "command.showFileHistory": "Show File Commit History"
+}
