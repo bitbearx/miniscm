@@ -23,7 +23,7 @@ test('package contributes path history and file compare context menus', () => {
   assert.ok(explorerCommands.includes('miniscm.compareFileWithRef'));
   assert.equal(
     explorerMenu.find((item: { command: string }) => item.command === 'miniscm.showFileHistory')?.when,
-    'resourceScheme == file'
+    'resourceScheme == file || explorerResourceIsFolder'
   );
   assert.equal(
     explorerMenu.find((item: { command: string }) => item.command === 'miniscm.compareFileWithRef')?.when,

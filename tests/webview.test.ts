@@ -189,6 +189,9 @@ test('createHistoryHtml renders commit hash as a copy target with success toast'
   assert.match(html, /showToast/);
   assert.match(html, /Copied/);
   assert.match(html, /3000/);
+  const toastStyle = html.match(/\.toast\s*\{[\s\S]*?\n    \}/)?.[0] ?? '';
+  assert.match(toastStyle, /color: var\(--vscode-button-foreground/);
+  assert.match(toastStyle, /background: var\(--vscode-button-background/);
   assert.doesNotMatch(html, /contextmenu/);
   assert.doesNotMatch(html, /cursor: copy/);
 });

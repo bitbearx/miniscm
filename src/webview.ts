@@ -392,12 +392,13 @@ export function createHistoryHtml(webview: vscode.Webview, state: HistoryWebview
       bottom: 14px;
       z-index: 10;
       max-width: min(260px, calc(100vw - 28px));
-      padding: 7px 10px;
-      color: var(--vscode-notifications-foreground, var(--vscode-foreground));
-      background: var(--vscode-notifications-background, var(--vscode-editorWidget-background));
-      border: 1px solid var(--vscode-notifications-border, var(--vscode-panel-border));
+      padding: 8px 12px;
+      color: var(--vscode-button-foreground, #ffffff);
+      background: var(--vscode-button-background, #0e639c);
+      border: 1px solid var(--vscode-button-hoverBackground, #1177bb);
       border-radius: 4px;
-      box-shadow: 0 4px 14px rgb(0 0 0 / 18%);
+      box-shadow: 0 8px 24px rgb(0 0 0 / 28%);
+      font-weight: 600;
       opacity: 0;
       pointer-events: none;
       transform: translateY(4px);
