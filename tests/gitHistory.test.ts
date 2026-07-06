@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict';
+import { execFile } from 'node:child_process';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { promisify } from 'node:util';
 
 import {
   getCommitFiles,
@@ -15,6 +17,8 @@ import {
   parseGitRefs,
   runGit
 } from '../src/gitHistory';
+
+const execFileAsync = promisify(execFile);
 
 test('parseCommitHistory parses git log entries with renamed files', () => {
   const output = [
@@ -168,30 +172,27 @@ test('getFileHistory reads real git history for a file', async () => {
   assert.deepEqual(changedFiles, [{ status: 'M', path: 'src/hello.txt', oldPath: undefined }]);
 });
 
+test('getFileHistory excludes merge commits by default', async () => {
+  const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'miniscm-merge-default-filter-'));
+  const filePath = path.join(repoRoot, 'story.txt');
+
+  await createMergeCommitForFile(repoRoot, filePath, 'story.txt');
+
+  const history = await getFileHistory(filePath);
+
+  assert.equal(
+    history.commits.some((commit) => commit.subject === 'Merge feature branch'),
+    false
+  );
+});
+
 test('getFileHistory includes merge commits that change the file', async () => {
   const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'miniscm-merge-history-'));
   const filePath = path.join(repoRoot, 'story.txt');
 
-  await runGit(repoRoot, ['init']);
-  await runGit(repoRoot, ['config', 'user.email', 'tester@example.com']);
-  await runGit(repoRoot, ['config', 'user.name', 'Test User']);
+  await createMergeCommitForFile(repoRoot, filePath, 'story.txt');
 
-  await fs.writeFile(filePath, 'base\n', 'utf8');
-  await runGit(repoRoot, ['add', '.']);
-  await runGit(repoRoot, ['commit', '-m', 'Base file']);
-  const defaultBranch = (await runGit(repoRoot, ['branch', '--show-current'])).trim();
-  await runGit(repoRoot, ['checkout', '-b', 'feature']);
-  await fs.writeFile(filePath, 'feature\n', 'utf8');
-  await runGit(repoRoot, ['commit', '-am', 'Feature edits file']);
-  await runGit(repoRoot, ['checkout', defaultBranch]);
-  await fs.writeFile(filePath, 'main\n', 'utf8');
-  await runGit(repoRoot, ['commit', '-am', 'Main edits file']);
-  await assert.rejects(runGit(repoRoot, ['merge', 'feature', '--no-ff', '--no-edit']));
-  await fs.writeFile(filePath, 'main\nfeature\n', 'utf8');
-  await runGit(repoRoot, ['add', '.']);
-  await runGit(repoRoot, ['commit', '-m', 'Merge feature branch']);
-
-  const history = await getFileHistory(filePath);
+  const history = await getFileHistory(filePath, { includeMerges: true, timeRange: '1' });
   const mergeCommit = history.commits.find((commit) => commit.subject === 'Merge feature branch');
 
   assert.ok(mergeCommit);
@@ -227,7 +228,7 @@ test('getFileHistory includes merge commits that changed the file before a renam
   await runGit(repoRoot, ['mv', 'old.txt', 'new.txt']);
   await runGit(repoRoot, ['commit', '-m', 'Rename old file']);
 
-  const history = await getFileHistory(newPath);
+  const history = await getFileHistory(newPath, { includeMerges: true, timeRange: '1' });
   const mergeCommit = history.commits.find((commit) => commit.subject === 'Merge feature branch');
 
   assert.ok(mergeCommit);
@@ -256,11 +257,43 @@ test('getFileHistory excludes merge commits that do not change the file', async 
   await runGit(repoRoot, ['commit', '-am', 'Main edits story file']);
   await runGit(repoRoot, ['merge', 'feature', '--no-ff', '-m', 'Merge feature branch']);
 
-  const history = await getFileHistory(storyPath);
+  const history = await getFileHistory(storyPath, { includeMerges: true, timeRange: '1' });
 
   assert.equal(
     history.commits.some((commit) => commit.subject === 'Merge feature branch'),
     false
+  );
+});
+
+test('getFileHistory defaults to the last year and can include all history', async () => {
+  const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'miniscm-time-filter-'));
+  const filePath = path.join(repoRoot, 'notes.txt');
+
+  await runGit(repoRoot, ['init']);
+  await runGit(repoRoot, ['config', 'user.email', 'tester@example.com']);
+  await runGit(repoRoot, ['config', 'user.name', 'Test User']);
+
+  await fs.writeFile(filePath, 'old\n', 'utf8');
+  await runGit(repoRoot, ['add', '.']);
+  await runGitWithEnv(repoRoot, ['commit', '-m', 'Old file'], {
+    GIT_AUTHOR_DATE: '2000-01-01T00:00:00+0800',
+    GIT_COMMITTER_DATE: '2000-01-01T00:00:00+0800'
+  });
+
+  await fs.writeFile(filePath, 'old\nrecent\n', 'utf8');
+  await runGit(repoRoot, ['add', '.']);
+  await runGit(repoRoot, ['commit', '-m', 'Recent file']);
+
+  const recentHistory = await getFileHistory(filePath);
+  const allHistory = await getFileHistory(filePath, { includeMerges: false, timeRange: 'all' });
+
+  assert.deepEqual(
+    recentHistory.commits.map((commit) => commit.subject),
+    ['Recent file']
+  );
+  assert.deepEqual(
+    allHistory.commits.map((commit) => commit.subject),
+    ['Recent file', 'Old file']
   );
 });
 
@@ -312,3 +345,33 @@ test('gitRefExists validates refs before opening a diff', async () => {
   assert.equal(await gitRefExists(repoRoot, 'refs/tags/v1.0.0'), true);
   assert.equal(await gitRefExists(repoRoot, 'missing-ref'), false);
 });
+
+async function createMergeCommitForFile(repoRoot: string, filePath: string, relativePath: string): Promise<void> {
+  await runGit(repoRoot, ['init']);
+  await runGit(repoRoot, ['config', 'user.email', 'tester@example.com']);
+  await runGit(repoRoot, ['config', 'user.name', 'Test User']);
+
+  await fs.writeFile(filePath, 'base\n', 'utf8');
+  await runGit(repoRoot, ['add', '.']);
+  await runGit(repoRoot, ['commit', '-m', 'Base file']);
+  const defaultBranch = (await runGit(repoRoot, ['branch', '--show-current'])).trim();
+  await runGit(repoRoot, ['checkout', '-b', 'feature']);
+  await fs.writeFile(filePath, 'feature\n', 'utf8');
+  await runGit(repoRoot, ['commit', '-am', 'Feature edits file']);
+  await runGit(repoRoot, ['checkout', defaultBranch]);
+  await fs.writeFile(filePath, 'main\n', 'utf8');
+  await runGit(repoRoot, ['commit', '-am', 'Main edits file']);
+  await assert.rejects(runGit(repoRoot, ['merge', 'feature', '--no-ff', '--no-edit']));
+  await fs.writeFile(path.join(repoRoot, relativePath), 'main\nfeature\n', 'utf8');
+  await runGit(repoRoot, ['add', '.']);
+  await runGit(repoRoot, ['commit', '-m', 'Merge feature branch']);
+}
+
+async function runGitWithEnv(repoRoot: string, args: string[], env: NodeJS.ProcessEnv): Promise<string> {
+  const { stdout } = await execFileAsync('git', args, {
+    cwd: repoRoot,
+    encoding: 'utf8',
+    env: { ...process.env, ...env }
+  });
+  return stdout;
+}

@@ -11,10 +11,11 @@ import {
   gitRefExists,
   runGit
 } from './gitHistory';
+import { normalizeFileHistoryOptions } from './historyOptions';
 import { createI18n, type I18n } from './i18n';
 import { createHistoryPanelOptions } from './panelOptions';
 import { createRefDiffDescriptor } from './refDiff';
-import type { ChangedFile, FileHistoryResult, GitBlobEntry, GitRef, GitRefType } from './types';
+import { DEFAULT_FILE_HISTORY_OPTIONS, type ChangedFile, type FileHistoryOptions, type FileHistoryResult, type GitBlobEntry, type GitRef, type GitRefType } from './types';
 import { createHistoryHtml, type HistoryWebviewState } from './webview';
 
 const BLOB_SCHEME = 'miniscm-git';
@@ -29,10 +30,19 @@ interface RefQuickPickItem extends vscode.QuickPickItem {
 /** Webview 发来的消息。 */
 type WebviewMessage =
   | { type: 'refresh' }
+  | { type: 'reloadHistory'; options?: Partial<FileHistoryOptions>; requestId?: number }
   | { type: 'loadCommitFiles'; commitHash: string }
   | { type: 'copyCommitHash'; commitHash: string }
   | { type: 'showChange'; commitHash: string; file: ChangedFile }
   | { type: 'compareLatest'; commitHash: string; file: ChangedFile };
+
+/** 单个文件历史面板的可变状态。 */
+interface OpenHistoryPanelState {
+  history: FileHistoryResult;
+  options: FileHistoryOptions;
+  latestHistoryRequestId: number;
+  render(history: FileHistoryResult, options: FileHistoryOptions): void;
+}
 
 /**
  * 为 VS Code diff 命令提供指定提交中的文件内容。
@@ -102,8 +112,8 @@ class HistoryPanelManager {
     }
 
     try {
-      const history = await getFileHistory(target.fsPath);
-      this.openPanel(target, history);
+      const history = await getFileHistory(target.fsPath, DEFAULT_FILE_HISTORY_OPTIONS);
+      this.openPanel(target, history, DEFAULT_FILE_HISTORY_OPTIONS);
     } catch (error) {
       vscode.window.showErrorMessage(`${this.i18n.t('error.loadHistory')} ${formatError(error)}`);
     }
@@ -203,7 +213,7 @@ class HistoryPanelManager {
    * @param target 当前查看的文件 URI。
    * @param history 文件历史数据。
    */
-  private openPanel(target: vscode.Uri, history: FileHistoryResult): void {
+  private openPanel(target: vscode.Uri, history: FileHistoryResult, options: FileHistoryOptions): void {
     const title = this.i18n.t('panel.title', path.basename(target.fsPath));
     const panel = vscode.window.createWebviewPanel(
       'miniscm.fileHistory',
@@ -212,18 +222,40 @@ class HistoryPanelManager {
       createHistoryPanelOptions(this.context.extensionUri)
     );
 
+    const panelState: OpenHistoryPanelState = {
+      history,
+      options,
+      latestHistoryRequestId: 0,
+      render: (nextHistory, nextOptions) => {
+        panelState.history = nextHistory;
+        panelState.options = nextOptions;
+        this.renderPanel(panel, target, nextHistory, nextOptions);
+      }
+    };
+    panelState.render(history, options);
+
+    const disposable = panel.webview.onDidReceiveMessage((message: WebviewMessage) => {
+      void this.handleMessage(panel, target, panelState, message);
+    });
+    panel.onDidDispose(() => disposable.dispose());
+  }
+
+  /**
+   * 根据当前历史数据重绘文件历史 Webview。
+   * @param panel 当前 Webview 面板。
+   * @param target 当前查看的文件 URI。
+   * @param history 文件历史数据。
+   * @param options 文件历史筛选选项。
+   */
+  private renderPanel(panel: vscode.WebviewPanel, target: vscode.Uri, history: FileHistoryResult, options: FileHistoryOptions): void {
     const state: HistoryWebviewState = {
       fileName: path.basename(target.fsPath),
       relativePath: history.relativePath,
       commits: history.commits,
-      filesByCommit: {}
+      filesByCommit: {},
+      options
     };
     panel.webview.html = createHistoryHtml(panel.webview, state, this.i18n);
-
-    const disposable = panel.webview.onDidReceiveMessage((message: WebviewMessage) => {
-      void this.handleMessage(panel, target, history, message);
-    });
-    panel.onDidDispose(() => disposable.dispose());
   }
 
   /**
@@ -236,19 +268,24 @@ class HistoryPanelManager {
   private async handleMessage(
     panel: vscode.WebviewPanel,
     target: vscode.Uri,
-    history: FileHistoryResult,
+    panelState: OpenHistoryPanelState,
     message: WebviewMessage
   ): Promise<void> {
     try {
-      if (message.type === 'refresh') {
-        const refreshed = await getFileHistory(target.fsPath);
-        panel.dispose();
-        this.openPanel(target, refreshed);
+      if (message.type === 'refresh' || message.type === 'reloadHistory') {
+        const options = normalizeFileHistoryOptions(message.type === 'reloadHistory' ? message.options : panelState.options);
+        const requestId = message.type === 'reloadHistory' ? message.requestId ?? panelState.latestHistoryRequestId + 1 : panelState.latestHistoryRequestId + 1;
+        panelState.latestHistoryRequestId = requestId;
+        const refreshed = await getFileHistory(target.fsPath, options);
+        if (requestId !== panelState.latestHistoryRequestId) {
+          return;
+        }
+        panelState.render(refreshed, options);
         return;
       }
 
       if (message.type === 'loadCommitFiles') {
-        const files = await getCommitFiles(history.repoRoot, message.commitHash);
+        const files = await getCommitFiles(panelState.history.repoRoot, message.commitHash);
         await panel.webview.postMessage({
           type: 'commitFiles',
           commitHash: message.commitHash,
@@ -259,21 +296,22 @@ class HistoryPanelManager {
 
       if (message.type === 'copyCommitHash') {
         await vscode.env.clipboard.writeText(message.commitHash);
+        await panel.webview.postMessage({ type: 'hashCopied' });
         return;
       }
 
       if (message.type === 'showChange') {
-        await this.showChange(history.repoRoot, message.commitHash, message.file);
+        await this.showChange(panelState.history.repoRoot, message.commitHash, message.file);
         return;
       }
 
       if (message.type === 'compareLatest') {
-        await this.compareWithLatest(history.repoRoot, message.commitHash, message.file);
+        await this.compareWithLatest(panelState.history.repoRoot, message.commitHash, message.file);
       }
     } catch (error) {
       await panel.webview.postMessage({
         type: 'error',
-        message: `${this.i18n.t('error.loadCommitFiles')} ${formatError(error)}`
+        message: `${this.i18n.t(getWebviewMessageErrorKey(message.type))} ${formatError(error)}`
       });
     }
   }
@@ -399,6 +437,21 @@ function getRefTypeMessageKey(type: GitRefType): 'refType.branch' | 'refType.rem
     return 'refType.tag';
   }
   return 'refType.branch';
+}
+
+/**
+ * 将 Webview 消息类型转换为对应的错误文案 key。
+ * @param type Webview 消息类型。
+ * @returns 错误文案 key。
+ */
+function getWebviewMessageErrorKey(type: WebviewMessage['type']): 'error.loadCommitFiles' | 'error.loadHistory' | 'error.copyHash' {
+  if (type === 'refresh' || type === 'reloadHistory') {
+    return 'error.loadHistory';
+  }
+  if (type === 'copyCommitHash') {
+    return 'error.copyHash';
+  }
+  return 'error.loadCommitFiles';
 }
 
 /**

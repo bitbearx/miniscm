@@ -17,6 +17,21 @@ export interface CommitHistoryItem {
   files: ChangedFile[];
 }
 
+/** 文件历史可选的时间范围。 */
+export type HistoryTimeRange = '1' | '2' | '3' | '5' | 'all';
+
+/** 文件历史查询与页面筛选选项。 */
+export interface FileHistoryOptions {
+  includeMerges: boolean;
+  timeRange: HistoryTimeRange;
+}
+
+/** 文件历史默认选项：最近一年且不包含合并提交。 */
+export const DEFAULT_FILE_HISTORY_OPTIONS: FileHistoryOptions = {
+  includeMerges: false,
+  timeRange: '1'
+};
+
 /** 文件历史查询结果。 */
 export interface FileHistoryResult {
   repoRoot: string;

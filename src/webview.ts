@@ -1,6 +1,6 @@
 import type * as vscode from 'vscode';
 
-import type { ChangedFile, CommitHistoryItem } from './types';
+import type { ChangedFile, CommitHistoryItem, FileHistoryOptions, HistoryTimeRange } from './types';
 import type { I18n } from './i18n';
 
 /** Webview 初始渲染所需的数据。 */
@@ -9,6 +9,7 @@ export interface HistoryWebviewState {
   relativePath: string;
   commits: CommitHistoryItem[];
   filesByCommit: Record<string, ChangedFile[]>;
+  options: FileHistoryOptions;
 }
 
 /**
@@ -53,13 +54,31 @@ export function createHistoryHtml(webview: vscode.Webview, state: HistoryWebview
     date: i18n.t('label.date'),
     emptyNoCommits: i18n.t('empty.noCommits'),
     file: i18n.t('label.file'),
+    loading: i18n.t('label.loading'),
     loadingFiles: i18n.t('label.loadingFiles'),
     merge: i18n.t('label.merge'),
     path: i18n.t('label.path'),
+    copied: i18n.t('toast.copied'),
+    emptyNoMatches: i18n.t('empty.noMatches'),
+    includeMerges: i18n.t('label.includeMerges'),
+    searchCommits: i18n.t('placeholder.searchCommits'),
+    timeRange: i18n.t('label.timeRange'),
+    timeRange1: i18n.t('timeRange.1'),
+    timeRange2: i18n.t('timeRange.2'),
+    timeRange3: i18n.t('timeRange.3'),
+    timeRange5: i18n.t('timeRange.5'),
+    timeRangeAll: i18n.t('timeRange.all'),
     title: i18n.t('webview.title')
   };
 
   const bootState = serializeForScript({ ...state, labels });
+  const timeOptions: Array<{ value: HistoryTimeRange; label: string }> = [
+    { value: '1', label: labels.timeRange1 },
+    { value: '2', label: labels.timeRange2 },
+    { value: '3', label: labels.timeRange3 },
+    { value: '5', label: labels.timeRange5 },
+    { value: 'all', label: labels.timeRangeAll }
+  ];
 
   return /* html */ `<!DOCTYPE html>
 <html lang="${i18n.language}">
@@ -100,6 +119,46 @@ export function createHistoryHtml(webview: vscode.Webview, state: HistoryWebview
       padding: 10px 14px;
       border-bottom: 1px solid var(--vscode-panel-border);
       background: var(--vscode-sideBar-background);
+    }
+
+    .history-controls {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .search-input,
+    .time-select {
+      min-height: 26px;
+      color: var(--vscode-input-foreground);
+      background: var(--vscode-input-background);
+      border: 1px solid var(--vscode-input-border, var(--vscode-panel-border));
+      border-radius: 3px;
+      font: inherit;
+    }
+
+    .search-input {
+      width: min(260px, 32vw);
+      padding: 3px 8px;
+    }
+
+    .time-select {
+      padding: 3px 6px;
+    }
+
+    .filter-check {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      color: var(--vscode-descriptionForeground);
+      white-space: nowrap;
+      user-select: none;
+    }
+
+    .filter-check input {
+      margin: 0;
     }
 
     .file-meta {
@@ -201,7 +260,7 @@ export function createHistoryHtml(webview: vscode.Webview, state: HistoryWebview
       background: transparent;
       border: 0;
       font: inherit;
-      cursor: copy;
+      cursor: pointer;
     }
 
     .hash-copy:hover {
@@ -326,7 +385,43 @@ export function createHistoryHtml(webview: vscode.Webview, state: HistoryWebview
       background: var(--vscode-toolbar-hoverBackground);
     }
 
+    .toast {
+      position: fixed;
+      right: 14px;
+      bottom: 14px;
+      z-index: 10;
+      max-width: min(260px, calc(100vw - 28px));
+      padding: 7px 10px;
+      color: var(--vscode-notifications-foreground, var(--vscode-foreground));
+      background: var(--vscode-notifications-background, var(--vscode-editorWidget-background));
+      border: 1px solid var(--vscode-notifications-border, var(--vscode-panel-border));
+      border-radius: 4px;
+      box-shadow: 0 4px 14px rgb(0 0 0 / 18%);
+      opacity: 0;
+      pointer-events: none;
+      transform: translateY(4px);
+      transition: opacity 120ms ease, transform 120ms ease;
+    }
+
+    .toast.visible {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
     @media (max-width: 680px) {
+      .toolbar {
+        align-items: stretch;
+        flex-direction: column;
+      }
+
+      .history-controls {
+        justify-content: flex-start;
+      }
+
+      .search-input {
+        width: 100%;
+      }
+
       .commit-row {
         grid-template-columns: 1fr;
       }
@@ -353,9 +448,17 @@ export function createHistoryHtml(webview: vscode.Webview, state: HistoryWebview
         <div class="file-name">${escapeHtml(state.fileName)}</div>
         <div class="file-path">${escapeHtml(state.relativePath)}</div>
       </div>
-      <button class="secondary" id="refresh">${labels.actionRefresh}</button>
+      <div class="history-controls">
+        <input class="search-input" id="searchCommits" type="search" placeholder="${escapeHtml(labels.searchCommits)}" aria-label="${escapeHtml(labels.searchCommits)}">
+        <label class="filter-check"><input id="includeMerges" type="checkbox"${state.options.includeMerges ? ' checked' : ''}>${escapeHtml(labels.includeMerges)}</label>
+        <select class="time-select" id="timeRange" aria-label="${escapeHtml(labels.timeRange)}">
+          ${timeOptions.map((option) => `<option value="${option.value}"${option.value === state.options.timeRange ? ' selected' : ''}>${escapeHtml(option.label)}</option>`).join('')}
+        </select>
+        <button class="secondary" id="refresh">${escapeHtml(labels.actionRefresh)}</button>
+      </div>
     </header>
     <main id="app"></main>
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
   </div>
 
   <script nonce="${nonce}">
@@ -363,9 +466,25 @@ export function createHistoryHtml(webview: vscode.Webview, state: HistoryWebview
     const state = ${bootState};
     const app = document.getElementById('app');
     const refreshButton = document.getElementById('refresh');
+    const includeMergesInput = document.getElementById('includeMerges');
+    const searchInput = document.getElementById('searchCommits');
+    const timeRangeSelect = document.getElementById('timeRange');
+    const toast = document.getElementById('toast');
+    let toastTimer = undefined;
+    state.historyRequestId = 0;
 
-    refreshButton.addEventListener('click', () => {
-      vscode.postMessage({ type: 'refresh' });
+    refreshButton.addEventListener('click', () => reloadHistory());
+    includeMergesInput.addEventListener('change', () => {
+      state.options.includeMerges = includeMergesInput.checked;
+      reloadHistory();
+    });
+    timeRangeSelect.addEventListener('change', () => {
+      state.options.timeRange = timeRangeSelect.value;
+      reloadHistory();
+    });
+    searchInput.addEventListener('input', () => {
+      state.searchQuery = searchInput.value;
+      render();
     });
 
     window.addEventListener('message', (event) => {
@@ -380,7 +499,18 @@ export function createHistoryHtml(webview: vscode.Webview, state: HistoryWebview
         state.loadingCommit = undefined;
         render();
       }
+      if (message.type === 'hashCopied') {
+        showToast(state.labels.copied);
+      }
     });
+
+    function reloadHistory() {
+      state.error = undefined;
+      state.loadingCommit = undefined;
+      state.historyRequestId += 1;
+      app.innerHTML = '<div class="loading">' + escapeHtml(state.labels.loading) + '</div>';
+      vscode.postMessage({ type: 'reloadHistory', options: state.options, requestId: state.historyRequestId });
+    }
 
     function selectCommit(commitHash) {
       state.activeCommit = state.activeCommit === commitHash ? undefined : commitHash;
@@ -398,12 +528,14 @@ export function createHistoryHtml(webview: vscode.Webview, state: HistoryWebview
         return;
       }
 
-      if (!state.commits.length) {
-        app.innerHTML = '<div class="empty">' + escapeHtml(state.labels.emptyNoCommits) + '</div>';
+      const commits = getFilteredCommits();
+      if (!commits.length) {
+        const emptyText = state.commits.length ? state.labels.emptyNoMatches : state.labels.emptyNoCommits;
+        app.innerHTML = '<div class="empty">' + escapeHtml(emptyText) + '</div>';
         return;
       }
 
-      app.innerHTML = state.commits.map(renderCommit).join('');
+      app.innerHTML = commits.map(renderCommit).join('');
       app.querySelectorAll('[data-commit]').forEach((row) => {
         row.addEventListener('click', () => selectCommit(row.dataset.commit));
         row.addEventListener('keydown', (event) => {
@@ -415,7 +547,6 @@ export function createHistoryHtml(webview: vscode.Webview, state: HistoryWebview
       });
       app.querySelectorAll('[data-action="copyHash"]').forEach((button) => {
         button.addEventListener('click', copyCommitHash);
-        button.addEventListener('contextmenu', copyCommitHash);
       });
       app.querySelectorAll('[data-action="change"]').forEach((button) => {
         button.addEventListener('click', (event) => {
@@ -428,6 +559,17 @@ export function createHistoryHtml(webview: vscode.Webview, state: HistoryWebview
           event.stopPropagation();
           vscode.postMessage({ type: 'compareLatest', commitHash: button.dataset.commitHash, file: JSON.parse(button.dataset.file) });
         });
+      });
+    }
+
+    function getFilteredCommits() {
+      const query = String(state.searchQuery || '').trim().toLowerCase();
+      if (!query) {
+        return state.commits;
+      }
+      return state.commits.filter((commit) => {
+        return [commit.hash, commit.shortHash, commit.subject, commit.message]
+          .some((value) => String(value || '').toLowerCase().includes(query));
       });
     }
 
@@ -459,6 +601,15 @@ export function createHistoryHtml(webview: vscode.Webview, state: HistoryWebview
       return '<button class="hash-copy" data-action="copyHash" data-commit-hash="' + escapeAttr(commit.hash) + '" title="' + escapeAttr(state.labels.actionCopyHash) + '" aria-label="' + escapeAttr(state.labels.actionCopyHash) + '">' +
         '<span class="hash">' + escapeHtml(commit.shortHash) + '</span>' +
       '</button>';
+    }
+
+    function showToast(message) {
+      toast.textContent = message;
+      toast.classList.add('visible');
+      window.clearTimeout(toastTimer);
+      toastTimer = window.setTimeout(() => {
+        toast.classList.remove('visible');
+      }, 3000);
     }
 
     function renderMergeBadge(commit) {

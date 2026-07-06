@@ -2,10 +2,12 @@ import { execFile } from 'node:child_process';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
-import type { ChangedFile, CommitHistoryItem, FileHistoryResult, GitRef, GitRefType, RepositoryFileInfo } from './types';
+import { getGitSinceValue, normalizeFileHistoryOptions } from './historyOptions';
+import type { ChangedFile, CommitHistoryItem, FileHistoryOptions, FileHistoryResult, GitRef, GitRefType, RepositoryFileInfo } from './types';
 
 const COMMIT_SEPARATOR = '\x1e';
 const FIELD_SEPARATOR = '\x1f';
+const MAX_MERGE_DIFF_CHECK_CONCURRENCY = 4;
 
 /**
  * 解析 git log 输出为提交历史列表。
@@ -130,11 +132,23 @@ export async function getRepositoryFileInfo(filePath: string): Promise<Repositor
 /**
  * 获取指定文件的提交历史。
  * @param filePath 文件绝对路径。
+ * @param options 文件历史查询选项。
  * @returns 文件历史数据。
  */
-export async function getFileHistory(filePath: string): Promise<FileHistoryResult> {
+export async function getFileHistory(filePath: string, options?: Partial<FileHistoryOptions>): Promise<FileHistoryResult> {
   const { repoRoot, relativePath } = await getRepositoryFileInfo(filePath);
-  const commonArgs = createFileHistoryArgs(relativePath);
+  const historyOptions = normalizeFileHistoryOptions(options);
+
+  if (!historyOptions.includeMerges) {
+    const output = await runGit(repoRoot, ['log', '--follow', ...createFileHistoryArgs(relativePath, historyOptions, false).slice(1)]);
+    return {
+      repoRoot,
+      relativePath,
+      commits: parseCommitHistory(output)
+    };
+  }
+
+  const commonArgs = createFileHistoryArgs(relativePath, historyOptions, true);
   const [fullHistoryOutput, followHistoryOutput] = await Promise.all([
     runGit(repoRoot, commonArgs),
     runGit(repoRoot, ['log', '--follow', ...commonArgs.slice(1)])
@@ -143,7 +157,7 @@ export async function getFileHistory(filePath: string): Promise<FileHistoryResul
   const followHistory = parseCommitHistory(followHistoryOutput);
   const historicalPaths = getHistoricalFilePaths(relativePath, followHistory);
   const historicalFullHistories = await Promise.all(
-    historicalPaths.map(async (historicalPath) => parseCommitHistory(await runGit(repoRoot, createFileHistoryArgs(historicalPath))))
+    historicalPaths.map(async (historicalPath) => parseCommitHistory(await runGit(repoRoot, createFileHistoryArgs(historicalPath, historyOptions, true))))
   );
 
   return {
@@ -245,19 +259,30 @@ function mergeCommitHistories(...histories: CommitHistoryItem[][]): CommitHistor
 /**
  * 创建查询单个文件历史的 Git 参数。
  * @param relativePath 文件相对仓库根目录的路径。
+ * @param options 文件历史查询选项。
+ * @param includeFullHistory 是否使用 full-history 查询。
  * @returns Git log 参数列表。
  */
-function createFileHistoryArgs(relativePath: string): string[] {
-  return [
+function createFileHistoryArgs(relativePath: string, options: FileHistoryOptions, includeFullHistory: boolean): string[] {
+  const args = [
     'log',
-    '--full-history',
     '--date=iso',
     `--format=${COMMIT_SEPARATOR}%H${FIELD_SEPARATOR}%P${FIELD_SEPARATOR}%an${FIELD_SEPARATOR}%ad${FIELD_SEPARATOR}%B${FIELD_SEPARATOR}`,
     '--name-status',
-    '--find-renames',
-    '--',
-    relativePath
+    '--find-renames'
   ];
+  if (includeFullHistory) {
+    args.splice(1, 0, '--full-history');
+  }
+  if (!options.includeMerges) {
+    args.push('--no-merges');
+  }
+  const since = getGitSinceValue(options.timeRange);
+  if (since) {
+    args.push(`--since=${since}`);
+  }
+  args.push('--', relativePath);
+  return args;
 }
 
 /**
@@ -290,11 +315,13 @@ async function filterMergeCommitsByPaths(
   relativePaths: string[],
   commits: CommitHistoryItem[]
 ): Promise<CommitHistoryItem[]> {
-  const checks = await Promise.all(
-    commits.map(async (commit) => ({
+  const checks = await mapWithConcurrencyLimit(
+    commits,
+    MAX_MERGE_DIFF_CHECK_CONCURRENCY,
+    async (commit) => ({
       commit,
       keep: !commit.isMerge || commit.files.length > 0 || (await mergeCommitTouchesAnyPath(repoRoot, relativePaths, commit.hash))
-    }))
+    })
   );
   return checks.filter((check) => check.keep).map((check) => check.commit);
 }
@@ -307,10 +334,35 @@ async function filterMergeCommitsByPaths(
  * @returns 是否改动任一路径。
  */
 async function mergeCommitTouchesAnyPath(repoRoot: string, relativePaths: string[], commitHash: string): Promise<boolean> {
-  const results = await Promise.all(
-    relativePaths.map((relativePath) => mergeCommitTouchesPath(repoRoot, relativePath, commitHash))
-  );
-  return results.some(Boolean);
+  for (const relativePath of relativePaths) {
+    if (await mergeCommitTouchesPath(repoRoot, relativePath, commitHash)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * 按固定并发数执行异步映射，避免大历史查询时同时启动过多 Git 子进程。
+ * @param items 输入列表。
+ * @param limit 最大并发数。
+ * @param mapper 单项映射函数。
+ * @returns 与输入顺序一致的映射结果。
+ */
+async function mapWithConcurrencyLimit<T, R>(items: T[], limit: number, mapper: (item: T) => Promise<R>): Promise<R[]> {
+  const results: R[] = [];
+  let nextIndex = 0;
+
+  async function worker(): Promise<void> {
+    while (nextIndex < items.length) {
+      const currentIndex = nextIndex;
+      nextIndex += 1;
+      results[currentIndex] = await mapper(items[currentIndex]);
+    }
+  }
+
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return results;
 }
 
 /**
