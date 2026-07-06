@@ -2,7 +2,7 @@
   "name": "miniscm",
   "displayName": "%extension.displayName%",
   "description": "%extension.description%",
-  "version": "0.0.7",
+  "version": "0.0.8",
   "publisher": "bitbearx",
   "license": "MIT",
   "files": [
@@ -51,18 +51,6 @@
         {
           "command": "miniscm.compareFileWithRef",
           "when": "resourceScheme == file && !explorerResourceIsFolder",
-          "group": "z_miniscm@21"
-        }
-      ],
-      "editor/context": [
-        {
-          "command": "miniscm.showFileHistory",
-          "when": "resourceScheme == file",
-          "group": "z_miniscm@20"
-        },
-        {
-          "command": "miniscm.compareFileWithRef",
-          "when": "resourceScheme == file",
           "group": "z_miniscm@21"
         }
       ],
