@@ -9,15 +9,18 @@ import {
   getCommitDetails,
   getGitRefs,
   getPathHistory,
+  getRepositoryPathInfo,
   getRepositoryFileInfo,
   gitRefExists,
   runGit
 } from './gitHistory';
+import { getRepositoryGraph } from './gitGraph';
+import { createRepositoryGraphHtml } from './graphWebview';
 import { normalizeFileHistoryOptions } from './historyOptions';
 import { createI18n, type I18n } from './i18n';
 import { createHistoryPanelOptions } from './panelOptions';
 import { createRefDiffDescriptor } from './refDiff';
-import { DEFAULT_FILE_HISTORY_OPTIONS, type ChangedFile, type FileHistoryOptions, type FileHistoryResult, type GitBlobEntry, type GitCommitDetails, type GitRef, type GitRefType } from './types';
+import { DEFAULT_FILE_HISTORY_OPTIONS, type ChangedFile, type FileHistoryOptions, type FileHistoryResult, type GitBlobEntry, type GitCommitDetails, type GitRef, type GitRefType, type RepositoryGraphResult } from './types';
 import { createCommitDetailsHtml, createHistoryHtml, type HistoryWebviewState } from './webview';
 
 const BLOB_SCHEME = 'miniscm-git';
@@ -39,10 +42,36 @@ type WebviewMessage =
   | { type: 'showChange'; commitHash: string; file: ChangedFile }
   | { type: 'compareLatest'; commitHash: string; file: ChangedFile };
 
+/** Git graph Webview 支持的提交操作。 */
+type GraphCommitAction =
+  | 'addTag'
+  | 'createBranch'
+  | 'checkout'
+  | 'cherryPick'
+  | 'revert'
+  | 'copyHash'
+  | 'copySubject';
+
+/** Git graph Webview 发来的消息。 */
+type GraphWebviewMessage =
+  | { type: 'selectGraphScope'; selectedRef?: string }
+  | { type: 'openCommitDetails'; commitHash: string }
+  | { type: 'graphCommitAction'; action: GraphCommitAction; commitHash: string; subject: string; parentCount: number };
+
 /** 打开 commit 详情命令的参数。 */
 interface OpenCommitDetailsCommandArgs {
   repoRoot?: string;
   commitHash?: string;
+}
+
+/** SCM 面板打开仓库 graph 时的仓库候选项。 */
+interface RepositoryQuickPickItem extends vscode.QuickPickItem {
+  repoRoot: string;
+}
+
+/** merge commit 操作时选择 mainline parent 的选项。 */
+interface MainlineParentQuickPickItem extends vscode.QuickPickItem {
+  parentNumber: string;
 }
 
 /** 单个文件历史面板的可变状态。 */
@@ -51,6 +80,13 @@ interface OpenHistoryPanelState {
   options: FileHistoryOptions;
   latestHistoryRequestId: number;
   render(history: FileHistoryResult, options: FileHistoryOptions): void;
+}
+
+/** 仓库 graph 面板的可变状态。 */
+interface OpenGraphPanelState {
+  graph: RepositoryGraphResult;
+  latestGraphRequestId: number;
+  render(graph: RepositoryGraphResult): void;
 }
 
 /**
@@ -512,6 +548,292 @@ class HistoryPanelManager {
 }
 
 /**
+ * 管理仓库 Git graph Webview 与提交右键操作。
+ */
+class RepositoryGraphPanelManager {
+  constructor(
+    private readonly context: vscode.ExtensionContext,
+    private readonly i18n: I18n
+  ) {}
+
+  /**
+   * 展示当前仓库的 Git graph。
+   * @param resource 命令参数中可能传入的 URI 或 SCM 上下文。
+   */
+  async show(resource?: unknown): Promise<void> {
+    const repoRoot = await this.resolveRepositoryRoot(resource);
+    if (!repoRoot) {
+      vscode.window.showWarningMessage(this.i18n.t('error.noRepository'));
+      return;
+    }
+
+    try {
+      this.openPanel(await getRepositoryGraph(repoRoot));
+    } catch (error) {
+      vscode.window.showErrorMessage(`${this.i18n.t('error.loadGraph')} ${formatError(error)}`);
+    }
+  }
+
+  /**
+   * 根据命令参数、当前编辑器或工作区推导仓库根目录。
+   * @param resource 命令传入的上下文。
+   * @returns Git 仓库根目录。
+   */
+  private async resolveRepositoryRoot(resource?: unknown): Promise<string | undefined> {
+    const resourceUri = getUriFromCommandArg(resource);
+    if (resourceUri?.scheme === 'file') {
+      return this.getRepositoryRootForPath(resourceUri.fsPath);
+    }
+
+    const activeUri = vscode.window.activeTextEditor?.document.uri;
+    if (activeUri?.scheme === 'file') {
+      const activeRepoRoot = await this.getRepositoryRootForPath(activeUri.fsPath);
+      if (activeRepoRoot) {
+        return activeRepoRoot;
+      }
+    }
+
+    const workspaceRepos = await this.getWorkspaceRepositoryRoots();
+    if (workspaceRepos.length === 0) {
+      return undefined;
+    }
+    if (workspaceRepos.length === 1) {
+      return workspaceRepos[0];
+    }
+
+    const selected = await vscode.window.showQuickPick(
+      workspaceRepos.map((repoRoot): RepositoryQuickPickItem => ({
+        label: path.basename(repoRoot),
+        description: repoRoot,
+        repoRoot
+      })),
+      {
+        placeHolder: this.i18n.t('placeholder.selectRepository'),
+        matchOnDescription: true
+      }
+    );
+    return selected?.repoRoot;
+  }
+
+  /**
+   * 解析指定路径所在的仓库根目录。
+   * @param targetPath 本地文件或目录路径。
+   * @returns Git 仓库根目录。
+   */
+  private async getRepositoryRootForPath(targetPath: string): Promise<string | undefined> {
+    try {
+      return (await getRepositoryPathInfo(targetPath)).repoRoot;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
+   * 收集工作区中的 Git 仓库根目录。
+   * @returns 去重后的仓库根目录列表。
+   */
+  private async getWorkspaceRepositoryRoots(): Promise<string[]> {
+    const folders = vscode.workspace.workspaceFolders?.filter((folder) => folder.uri.scheme === 'file') ?? [];
+    const repoRoots = new Set<string>();
+    for (const folder of folders) {
+      try {
+        repoRoots.add((await runGit(folder.uri.fsPath, ['rev-parse', '--show-toplevel'])).trim());
+      } catch {
+        // 允许非 Git 工作区存在，继续检查其他 workspace folder。
+      }
+    }
+    return [...repoRoots].sort((left, right) => left.localeCompare(right));
+  }
+
+  /**
+   * 创建并初始化仓库 graph Webview。
+   * @param graph Git graph 数据。
+   */
+  private openPanel(graph: RepositoryGraphResult): void {
+    const panel = vscode.window.createWebviewPanel(
+      'miniscm.repositoryGraph',
+      this.i18n.t('webview.graphTitle'),
+      vscode.ViewColumn.Beside,
+      createHistoryPanelOptions(this.context.extensionUri)
+    );
+
+    const panelState: OpenGraphPanelState = {
+      graph,
+      latestGraphRequestId: 0,
+      render: (nextGraph) => {
+        panelState.graph = nextGraph;
+        panel.webview.html = createRepositoryGraphHtml(panel.webview, nextGraph, this.i18n);
+      }
+    };
+    panelState.render(graph);
+
+    const disposable = panel.webview.onDidReceiveMessage((message: GraphWebviewMessage) => {
+      void this.handleMessage(panel, panelState, message);
+    });
+    panel.onDidDispose(() => disposable.dispose());
+  }
+
+  /**
+   * 处理 graph Webview 中的用户操作。
+   * @param panel 当前 Webview 面板。
+   * @param panelState 当前 graph 面板状态。
+   * @param message Webview 消息。
+   */
+  private async handleMessage(
+    panel: vscode.WebviewPanel,
+    panelState: OpenGraphPanelState,
+    message: GraphWebviewMessage
+  ): Promise<void> {
+    try {
+      if (message.type === 'selectGraphScope') {
+        const requestId = panelState.latestGraphRequestId + 1;
+        panelState.latestGraphRequestId = requestId;
+        const graph = await getRepositoryGraph(panelState.graph.repoRoot, message.selectedRef);
+        if (requestId !== panelState.latestGraphRequestId) {
+          return;
+        }
+        panelState.render(graph);
+        return;
+      }
+
+      if (message.type === 'openCommitDetails') {
+        await vscode.commands.executeCommand('miniscm.openCommitDetails', {
+          repoRoot: panelState.graph.repoRoot,
+          commitHash: message.commitHash
+        });
+        return;
+      }
+
+      await this.handleCommitAction(panel, panelState, message);
+    } catch (error) {
+      await panel.webview.postMessage({
+        type: 'graphError',
+        message: `${this.i18n.t('error.graphAction')} ${formatError(error)}`
+      });
+    }
+  }
+
+  /**
+   * 执行 graph commit 右键菜单动作。
+   * @param panel 当前 Webview 面板。
+   * @param panelState 当前 graph 面板状态。
+   * @param message 提交动作消息。
+   */
+  private async handleCommitAction(
+    panel: vscode.WebviewPanel,
+    panelState: OpenGraphPanelState,
+    message: Extract<GraphWebviewMessage, { type: 'graphCommitAction' }>
+  ): Promise<void> {
+    if (message.action === 'copyHash') {
+      await vscode.env.clipboard.writeText(message.commitHash);
+      await panel.webview.postMessage({ type: 'graphActionDone', message: this.i18n.t('toast.copied') });
+      return;
+    }
+
+    if (message.action === 'copySubject') {
+      await vscode.env.clipboard.writeText(message.subject);
+      await panel.webview.postMessage({ type: 'graphActionDone', message: this.i18n.t('toast.copied') });
+      return;
+    }
+
+    const args = await this.createCommitActionArgs(
+      panelState.graph.repoRoot,
+      message.action,
+      message.commitHash,
+      message.parentCount
+    );
+    if (!args) {
+      return;
+    }
+
+    await runGit(panelState.graph.repoRoot, args);
+    const successMessage = this.i18n.t(getGraphActionSuccessKey(message.action));
+    vscode.window.showInformationMessage(successMessage);
+    panelState.render(await getRepositoryGraph(panelState.graph.repoRoot, panelState.graph.selectedRef));
+    await panel.webview.postMessage({ type: 'graphActionDone', message: successMessage });
+  }
+
+  /**
+   * 根据用户选择构造 Git 命令参数。
+   * @param repoRoot Git 仓库根目录。
+   * @param action graph commit 动作。
+   * @param commitHash 目标提交哈希。
+   * @returns Git 命令参数；用户取消输入时返回 undefined。
+   */
+  private async createCommitActionArgs(
+    repoRoot: string,
+    action: Exclude<GraphCommitAction, 'copyHash' | 'copySubject'>,
+    commitHash: string,
+    parentCount: number
+  ): Promise<string[] | undefined> {
+    if (action === 'addTag') {
+      const tagName = await this.showRefNameInput('placeholder.enterTagName', 'v1.0.0');
+      return tagName ? ['tag', tagName, commitHash] : undefined;
+    }
+
+    if (action === 'createBranch') {
+      const branchName = await this.showRefNameInput('placeholder.enterBranchName', 'feature/new-branch');
+      return branchName ? ['branch', branchName, commitHash] : undefined;
+    }
+
+    if (action === 'checkout') {
+      return ['checkout', commitHash];
+    }
+
+    if (action === 'cherryPick') {
+      const mainline = parentCount > 1 ? await this.pickMainlineParent(parentCount) : undefined;
+      if (parentCount > 1 && !mainline) {
+        return undefined;
+      }
+      return mainline ? ['cherry-pick', '-m', mainline, commitHash] : ['cherry-pick', commitHash];
+    }
+
+    await runGit(repoRoot, ['rev-parse', '--verify', `${commitHash}^{commit}`]);
+    const mainline = parentCount > 1 ? await this.pickMainlineParent(parentCount) : undefined;
+    if (parentCount > 1 && !mainline) {
+      return undefined;
+    }
+    return mainline ? ['revert', '--no-edit', '-m', mainline, commitHash] : ['revert', '--no-edit', commitHash];
+  }
+
+  /**
+   * 弹出 ref 名称输入框。
+   * @param promptKey 输入框提示文案 key。
+   * @param placeHolder 输入框占位示例。
+   * @returns 用户输入的 ref 名称。
+   */
+  private async showRefNameInput(promptKey: 'placeholder.enterTagName' | 'placeholder.enterBranchName', placeHolder: string): Promise<string | undefined> {
+    const value = await vscode.window.showInputBox({
+      prompt: this.i18n.t(promptKey),
+      placeHolder
+    });
+    const trimmed = value?.trim();
+    return trimmed || undefined;
+  }
+
+  /**
+   * 选择 merge commit 操作所需的 mainline parent。
+   * @param parentCount merge commit 的父提交数量。
+   * @returns mainline parent 序号。
+   */
+  private async pickMainlineParent(parentCount: number): Promise<string | undefined> {
+    const selected = await vscode.window.showQuickPick(
+      Array.from({ length: parentCount }, (_, index): MainlineParentQuickPickItem => {
+        const parentNumber = String(index + 1);
+        return {
+          label: this.i18n.t('graph.mainlineParent', parentNumber),
+          parentNumber
+        };
+      }),
+      {
+        placeHolder: this.i18n.t('placeholder.selectMainlineParent')
+      }
+    );
+    return selected?.parentNumber;
+  }
+}
+
+/**
  * 将未知错误格式化为适合展示的文本。
  * @param error 未知错误对象。
  * @returns 错误文本。
@@ -551,6 +873,61 @@ function getWebviewMessageErrorKey(type: WebviewMessage['type']): 'error.loadCom
 }
 
 /**
+ * 将 graph 提交动作转换为成功提示文案 key。
+ * @param action graph commit 动作。
+ * @returns 成功提示文案 key。
+ */
+function getGraphActionSuccessKey(
+  action: Exclude<GraphCommitAction, 'copyHash' | 'copySubject'>
+): 'toast.graphTagCreated' | 'toast.graphBranchCreated' | 'toast.graphCheckedOut' | 'toast.graphCherryPicked' | 'toast.graphReverted' {
+  if (action === 'addTag') {
+    return 'toast.graphTagCreated';
+  }
+  if (action === 'createBranch') {
+    return 'toast.graphBranchCreated';
+  }
+  if (action === 'checkout') {
+    return 'toast.graphCheckedOut';
+  }
+  if (action === 'cherryPick') {
+    return 'toast.graphCherryPicked';
+  }
+  return 'toast.graphReverted';
+}
+
+/**
+ * 从 VS Code 命令参数中尽量提取 URI。
+ * @param resource 命令参数。
+ * @returns 本地资源 URI。
+ */
+function getUriFromCommandArg(resource: unknown): vscode.Uri | undefined {
+  if (resource instanceof vscode.Uri) {
+    return resource;
+  }
+  if (isUriLike(resource)) {
+    return vscode.Uri.file(resource.fsPath);
+  }
+
+  const rootUri = (resource as { rootUri?: unknown } | undefined)?.rootUri;
+  if (rootUri instanceof vscode.Uri) {
+    return rootUri;
+  }
+  if (isUriLike(rootUri)) {
+    return vscode.Uri.file(rootUri.fsPath);
+  }
+  return undefined;
+}
+
+/**
+ * 判断对象是否包含可转为本地 URI 的 fsPath。
+ * @param value 待判断对象。
+ * @returns 是否像 VS Code URI。
+ */
+function isUriLike(value: unknown): value is { fsPath: string } {
+  return typeof value === 'object' && value !== null && typeof (value as { fsPath?: unknown }).fsPath === 'string';
+}
+
+/**
  * VS Code 激活扩展时注册命令和虚拟文档提供器。
  * @param context 扩展上下文。
  */
@@ -558,6 +935,7 @@ export function activate(context: vscode.ExtensionContext): void {
   const i18n = createI18n(vscode.env.language);
   const blobProvider = new GitBlobContentProvider();
   const historyPanels = new HistoryPanelManager(context, i18n, blobProvider);
+  const graphPanels = new RepositoryGraphPanelManager(context, i18n);
   const blameStatus = new LineBlameStatusManager(i18n);
   blameStatus.register(context);
 
@@ -571,6 +949,9 @@ export function activate(context: vscode.ExtensionContext): void {
     }),
     vscode.commands.registerCommand('miniscm.openCommitDetails', (args?: OpenCommitDetailsCommandArgs) => {
       void historyPanels.openCommitDetails(args);
+    }),
+    vscode.commands.registerCommand('miniscm.showRepositoryGraph', (resource?: unknown) => {
+      void graphPanels.show(resource);
     })
   );
 }

@@ -14,13 +14,15 @@
 - `src/`：扩展源码。
   - `extension.ts`：扩展入口，注册右键命令、Webview、diff 操作。
   - `gitHistory.ts`：Git 命令调用与提交历史解析。
+  - `gitGraph.ts`：仓库 Git Graph 数据读取、ref 标记解析和 graph lane 布局。
   - `blameStatus.ts`：当前行 Git Blame 状态栏和 tooltip 展示。
   - `changedFiles.ts`：变更文件列表排序工具。
   - `historyOptions.ts`：文件历史筛选选项的默认值与规范化逻辑。
+  - `graphWebview.ts`：仓库 Git Graph Webview 的 HTML、样式和右键菜单交互。
   - `webview.ts`：文件历史与提交详情 Webview 的 HTML、样式和前端交互。
   - `i18n.ts`：运行时文案国际化。
   - `types.ts`：共享 TypeScript 类型。
-- `tests/`：Node 内置 test runner 测试，覆盖 Git 解析、真实 Git 仓库历史读取、Git Blame 链接解析、提交详情渲染、变更文件排序和 Webview 回归。
+- `tests/`：Node 内置 test runner 测试，覆盖 Git 解析、真实 Git 仓库历史与 Graph 读取、Git Graph Webview、Git Blame 链接解析、提交详情渲染、变更文件排序和 Webview 回归。
 - `out/`：TypeScript 编译输出目录，由 `npm run compile` 生成，不手动编辑。
 - `node_modules/`：npm 依赖目录，不手动编辑。
 - `package.json`：VS Code 扩展清单、命令/菜单贡献点、脚本和依赖。

@@ -1,7 +1,8 @@
 {
   "extension.displayName": "Mini SCM History",
-  "extension.description": "Browse Git history, open commit details with file diffs, compare files with commits or refs, and inspect line blame from the status bar.",
+  "extension.description": "Browse Git history, open repository graphs and commit details, compare files with commits or refs, and inspect line blame from the status bar.",
   "command.category": "Mini SCM",
   "command.showFileHistory": "Show File or Folder Commit History",
-  "command.compareFileWithRef": "Compare File with Ref"
+  "command.compareFileWithRef": "Compare File with Ref",
+  "command.showRepositoryGraph": "Show Repository Git Graph"
 }

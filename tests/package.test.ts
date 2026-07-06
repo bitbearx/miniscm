@@ -7,10 +7,12 @@ const packageJson = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'package
 const packageNls = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'package.nls.json'), 'utf8'));
 const packageNlsZh = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'package.nls.zh-cn.json'), 'utf8'));
 
-test('package contributes path history and file compare context menus', () => {
+test('package contributes path history file compare and graph entry points', () => {
   const commands = packageJson.contributes.commands.map((command: { command: string }) => command.command);
   const explorerMenu = packageJson.contributes.menus['explorer/context'];
   const explorerCommands = explorerMenu.map((item: { command: string }) => item.command);
+  const scmTitleMenu = packageJson.contributes.menus['scm/title'];
+  const scmTitleCommands = scmTitleMenu.map((item: { command: string }) => item.command);
   const editorTitleContextMenu = packageJson.contributes.menus['editor/title/context'].map(
     (item: { command: string }) => item.command
   );
@@ -20,9 +22,20 @@ test('package contributes path history and file compare context menus', () => {
 
   assert.ok(packageJson.activationEvents.includes('onCommand:miniscm.compareFileWithRef'));
   assert.ok(packageJson.activationEvents.includes('onCommand:miniscm.openCommitDetails'));
+  assert.ok(packageJson.activationEvents.includes('onCommand:miniscm.showRepositoryGraph'));
   assert.ok(packageJson.activationEvents.includes('onStartupFinished'));
   assert.ok(commands.includes('miniscm.compareFileWithRef'));
+  assert.ok(commands.includes('miniscm.showRepositoryGraph'));
   assert.ok(explorerCommands.includes('miniscm.compareFileWithRef'));
+  assert.ok(scmTitleCommands.includes('miniscm.showRepositoryGraph'));
+  assert.equal(
+    scmTitleMenu.find((item: { command: string }) => item.command === 'miniscm.showRepositoryGraph')?.when,
+    'scmProvider == git'
+  );
+  assert.equal(
+    scmTitleMenu.find((item: { command: string }) => item.command === 'miniscm.showRepositoryGraph')?.group,
+    'navigation'
+  );
   assert.equal(
     explorerMenu.find((item: { command: string }) => item.command === 'miniscm.showFileHistory')?.when,
     'resourceScheme == file || explorerResourceIsFolder'
@@ -36,6 +49,8 @@ test('package contributes path history and file compare context menus', () => {
   assert.deepEqual(editorTitleContextGroups, ['z_miniscm@20', 'z_miniscm@21']);
   assert.equal(packageNls['command.showFileHistory'], 'Show File or Folder Commit History');
   assert.equal(packageNls['command.compareFileWithRef'], 'Compare File with Ref');
+  assert.equal(packageNls['command.showRepositoryGraph'], 'Show Repository Git Graph');
   assert.equal(packageNlsZh['command.showFileHistory'], '查看文件或文件夹提交历史');
   assert.equal(packageNlsZh['command.compareFileWithRef'], '与其他 Ref 对比');
+  assert.equal(packageNlsZh['command.showRepositoryGraph'], '查看仓库 Git Graph');
 });

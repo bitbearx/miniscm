@@ -2,7 +2,7 @@
   "name": "miniscm",
   "displayName": "%extension.displayName%",
   "description": "%extension.description%",
-  "version": "0.1.2",
+  "version": "0.2.5",
   "publisher": "bitbearx",
   "license": "MIT",
   "files": [
@@ -25,6 +25,7 @@
     "onStartupFinished",
     "onCommand:miniscm.showFileHistory",
     "onCommand:miniscm.compareFileWithRef",
+    "onCommand:miniscm.showRepositoryGraph",
     "onCommand:miniscm.openCommitDetails"
   ],
   "main": "./out/src/extension.js",
@@ -41,9 +42,22 @@
         "title": "%command.compareFileWithRef%",
         "category": "%command.category%",
         "icon": "$(git-compare)"
+      },
+      {
+        "command": "miniscm.showRepositoryGraph",
+        "title": "%command.showRepositoryGraph%",
+        "category": "%command.category%",
+        "icon": "$(git-branch)"
       }
     ],
     "menus": {
+      "scm/title": [
+        {
+          "command": "miniscm.showRepositoryGraph",
+          "when": "scmProvider == git",
+          "group": "navigation"
+        }
+      ],
       "explorer/context": [
         {
           "command": "miniscm.showFileHistory",

@@ -66,6 +66,50 @@ export interface GitRef {
   type: GitRefType;
 }
 
+/** Git graph 顶部可选的渲染范围。 */
+export type GitGraphScope = GitRef;
+
+/** Git graph 中绑定到提交上的引用标记。 */
+export type GitGraphRef = GitRef;
+
+/** Git graph 中的一条提交记录和布局信息。 */
+export interface GitGraphCommit {
+  hash: string;
+  shortHash: string;
+  parents: string[];
+  author: string;
+  date: string;
+  subject: string;
+  isMerge: boolean;
+  refs: GitGraphRef[];
+  lane: number;
+  parentLanes: number[];
+  activeLanes: number[];
+  laneCount: number;
+}
+
+/** 整个仓库 Git graph Webview 的渲染数据。 */
+export interface RepositoryGraphResult {
+  repoRoot: string;
+  selectedRef?: string;
+  scopes: GitGraphScope[];
+  commits: GitGraphCommit[];
+  hasMore: boolean;
+  maxCommits: number;
+}
+
+/** 仓库 Git graph 查询选项。 */
+export interface RepositoryGraphOptions {
+  timeRange: HistoryTimeRange;
+  maxCommits: number;
+}
+
+/** 仓库 Git graph 默认查询选项：最近一年，最多 1000 条提交。 */
+export const DEFAULT_REPOSITORY_GRAPH_OPTIONS: RepositoryGraphOptions = {
+  timeRange: '1',
+  maxCommits: 1000
+};
+
 /** 临时 Git blob 文档的读取参数。 */
 export interface GitBlobEntry {
   repoRoot: string;
