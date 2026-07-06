@@ -1,7 +1,7 @@
 {
   "extension.displayName": "Mini SCM History",
-  "extension.description": "Browse a file's Git commit history and compare files with commits or refs from a right-click menu.",
+  "extension.description": "Browse a file or folder's Git commit history and compare files with commits or refs from a right-click menu.",
   "command.category": "Mini SCM",
-  "command.showFileHistory": "Show File Commit History",
+  "command.showFileHistory": "Show File or Folder Commit History",
   "command.compareFileWithRef": "Compare File with Ref"
 }

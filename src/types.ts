@@ -5,7 +5,7 @@ export interface ChangedFile {
   oldPath?: string;
 }
 
-/** 文件相关的一条提交历史记录。 */
+/** 文件或文件夹相关的一条提交历史记录。 */
 export interface CommitHistoryItem {
   hash: string;
   shortHash: string;
@@ -32,10 +32,14 @@ export const DEFAULT_FILE_HISTORY_OPTIONS: FileHistoryOptions = {
   timeRange: '1'
 };
 
-/** 文件历史查询结果。 */
+/** 历史查询目标类型。 */
+export type HistoryTargetKind = 'file' | 'folder';
+
+/** 文件或文件夹历史查询结果。 */
 export interface FileHistoryResult {
   repoRoot: string;
   relativePath: string;
+  targetKind: HistoryTargetKind;
   commits: CommitHistoryItem[];
 }
 
@@ -43,6 +47,13 @@ export interface FileHistoryResult {
 export interface RepositoryFileInfo {
   repoRoot: string;
   relativePath: string;
+}
+
+/** 文件或文件夹在 Git 仓库中的定位信息。 */
+export interface RepositoryPathInfo {
+  repoRoot: string;
+  relativePath: string;
+  targetKind: HistoryTargetKind;
 }
 
 /** 可用于对比的 Git 引用类型。 */

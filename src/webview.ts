@@ -1,12 +1,13 @@
 import type * as vscode from 'vscode';
 
-import type { ChangedFile, CommitHistoryItem, FileHistoryOptions, HistoryTimeRange } from './types';
+import type { ChangedFile, CommitHistoryItem, FileHistoryOptions, HistoryTargetKind, HistoryTimeRange } from './types';
 import type { I18n } from './i18n';
 
 /** Webview 初始渲染所需的数据。 */
 export interface HistoryWebviewState {
   fileName: string;
   relativePath: string;
+  targetKind: HistoryTargetKind;
   commits: CommitHistoryItem[];
   filesByCommit: Record<string, ChangedFile[]>;
   options: FileHistoryOptions;

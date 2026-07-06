@@ -10,6 +10,7 @@ test('createHistoryHtml renders flat changed-file rows without tree depth classe
     {
       fileName: 'hello.txt',
       relativePath: 'src/hello.txt',
+      targetKind: 'file',
       commits: [],
       filesByCommit: {},
       options: { includeMerges: false, timeRange: '1' }
@@ -31,6 +32,7 @@ test('createHistoryHtml renders history filters with default values', () => {
     {
       fileName: 'hello.txt',
       relativePath: 'src/hello.txt',
+      targetKind: 'file',
       commits: [],
       filesByCommit: {},
       options: { includeMerges: false, timeRange: '1' }
@@ -56,6 +58,7 @@ test('createHistoryHtml sends reload requests with an increasing request id', ()
     {
       fileName: 'hello.txt',
       relativePath: 'src/hello.txt',
+      targetKind: 'file',
       commits: [],
       filesByCommit: {},
       options: { includeMerges: false, timeRange: '1' }
@@ -74,6 +77,7 @@ test('createHistoryHtml filters commits by hash subject and description', () => 
     {
       fileName: 'hello.txt',
       relativePath: 'src/hello.txt',
+      targetKind: 'file',
       commits: [],
       filesByCommit: {},
       options: { includeMerges: false, timeRange: '1' }
@@ -93,6 +97,7 @@ test('createHistoryHtml renders author after hash and keeps multi-line commit me
     {
       fileName: 'hello.txt',
       relativePath: 'src/hello.txt',
+      targetKind: 'file',
       commits: [
         {
           hash: 'abc123',
@@ -124,6 +129,7 @@ test('createHistoryHtml renders merge commits with a dedicated badge', () => {
     {
       fileName: 'story.txt',
       relativePath: 'story.txt',
+      targetKind: 'file',
       commits: [
         {
           hash: 'abc123',
@@ -157,6 +163,7 @@ test('createHistoryHtml renders commit hash as a copy target with success toast'
     {
       fileName: 'hello.txt',
       relativePath: 'src/hello.txt',
+      targetKind: 'file',
       commits: [
         {
           hash: 'abc123456789',

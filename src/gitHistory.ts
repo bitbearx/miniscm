@@ -3,7 +3,17 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 
 import { getGitSinceValue, normalizeFileHistoryOptions } from './historyOptions';
-import type { ChangedFile, CommitHistoryItem, FileHistoryOptions, FileHistoryResult, GitRef, GitRefType, RepositoryFileInfo } from './types';
+import type {
+  ChangedFile,
+  CommitHistoryItem,
+  FileHistoryOptions,
+  FileHistoryResult,
+  GitRef,
+  GitRefType,
+  HistoryTargetKind,
+  RepositoryFileInfo,
+  RepositoryPathInfo
+} from './types';
 
 const COMMIT_SEPARATOR = '\x1e';
 const FIELD_SEPARATOR = '\x1f';
@@ -116,17 +126,64 @@ export function toGitRelativePath(repoRoot: string, filePath: string): string {
 }
 
 /**
+ * 查找文件或文件夹所在的 Git 仓库根目录。
+ * @param targetPath 文件或文件夹绝对路径。
+ * @param targetKind 目标类型。
+ * @returns Git 仓库根目录。
+ */
+async function findRepositoryRootForPath(targetPath: string, targetKind: HistoryTargetKind): Promise<string> {
+  const cwd = targetKind === 'folder' ? targetPath : path.dirname(targetPath);
+  return (await runGit(cwd, ['rev-parse', '--show-toplevel'])).trim();
+}
+
+/**
  * 获取文件所在仓库与相对路径，不读取提交历史。
  * @param filePath 文件绝对路径。
  * @returns 文件在 Git 仓库中的定位信息。
  */
 export async function getRepositoryFileInfo(filePath: string): Promise<RepositoryFileInfo> {
-  const realFilePath = await fs.realpath(filePath);
-  const repoRoot = await findRepositoryRoot(realFilePath);
+  const { repoRoot, relativePath, targetKind } = await getRepositoryPathInfo(filePath);
+  if (targetKind !== 'file') {
+    throw new Error('Expected a file path.');
+  }
   return {
     repoRoot,
-    relativePath: toGitRelativePath(repoRoot, realFilePath)
+    relativePath
   };
+}
+
+/**
+ * 获取文件或文件夹所在仓库、相对路径与目标类型。
+ * @param targetPath 文件或文件夹绝对路径。
+ * @returns 目标在 Git 仓库中的定位信息。
+ */
+export async function getRepositoryPathInfo(targetPath: string): Promise<RepositoryPathInfo> {
+  const realTargetPath = await fs.realpath(targetPath);
+  const targetStat = await fs.stat(realTargetPath);
+  const targetKind: HistoryTargetKind = targetStat.isDirectory() ? 'folder' : 'file';
+  const repoRoot = await findRepositoryRootForPath(realTargetPath, targetKind);
+  return {
+    repoRoot,
+    relativePath: toGitRelativePath(repoRoot, realTargetPath) || '.',
+    targetKind
+  };
+}
+
+/**
+ * 获取指定文件或文件夹的提交历史。
+ * @param targetPath 文件或文件夹绝对路径。
+ * @param options 历史查询选项。
+ * @returns 文件或文件夹历史数据。
+ */
+export async function getPathHistory(targetPath: string, options?: Partial<FileHistoryOptions>): Promise<FileHistoryResult> {
+  const pathInfo = await getRepositoryPathInfo(targetPath);
+  const historyOptions = normalizeFileHistoryOptions(options);
+
+  if (pathInfo.targetKind === 'folder') {
+    return getFolderHistory(pathInfo.repoRoot, pathInfo.relativePath, historyOptions);
+  }
+
+  return getFileHistoryFromRepo(pathInfo.repoRoot, pathInfo.relativePath, historyOptions);
 }
 
 /**
@@ -138,12 +195,27 @@ export async function getRepositoryFileInfo(filePath: string): Promise<Repositor
 export async function getFileHistory(filePath: string, options?: Partial<FileHistoryOptions>): Promise<FileHistoryResult> {
   const { repoRoot, relativePath } = await getRepositoryFileInfo(filePath);
   const historyOptions = normalizeFileHistoryOptions(options);
+  return getFileHistoryFromRepo(repoRoot, relativePath, historyOptions);
+}
 
+/**
+ * 获取仓库内指定文件路径的提交历史。
+ * @param repoRoot Git 仓库根目录。
+ * @param relativePath 文件相对仓库根目录的路径。
+ * @param historyOptions 文件历史查询选项。
+ * @returns 文件历史数据。
+ */
+async function getFileHistoryFromRepo(
+  repoRoot: string,
+  relativePath: string,
+  historyOptions: FileHistoryOptions
+): Promise<FileHistoryResult> {
   if (!historyOptions.includeMerges) {
     const output = await runGit(repoRoot, ['log', '--follow', ...createFileHistoryArgs(relativePath, historyOptions, false).slice(1)]);
     return {
       repoRoot,
       relativePath,
+      targetKind: 'file',
       commits: parseCommitHistory(output)
     };
   }
@@ -163,6 +235,7 @@ export async function getFileHistory(filePath: string, options?: Partial<FileHis
   return {
     repoRoot,
     relativePath,
+    targetKind: 'file',
     commits: await filterMergeCommitsByPaths(
       repoRoot,
       [relativePath, ...historicalPaths],
@@ -172,20 +245,47 @@ export async function getFileHistory(filePath: string, options?: Partial<FileHis
 }
 
 /**
- * 获取某个提交中全部变更的文件。
+ * 获取仓库内指定文件夹路径的提交历史。
+ * @param repoRoot Git 仓库根目录。
+ * @param relativePath 文件夹相对仓库根目录的路径。
+ * @param historyOptions 文件历史查询选项。
+ * @returns 文件夹历史数据。
+ */
+async function getFolderHistory(
+  repoRoot: string,
+  relativePath: string,
+  historyOptions: FileHistoryOptions
+): Promise<FileHistoryResult> {
+  const output = await runGit(repoRoot, createFolderHistoryArgs(relativePath, historyOptions, historyOptions.includeMerges));
+  const commits = parseCommitHistory(output);
+  return {
+    repoRoot,
+    relativePath,
+    targetKind: 'folder',
+    commits: historyOptions.includeMerges ? await filterMergeCommitsByPaths(repoRoot, [relativePath], commits) : commits
+  };
+}
+
+/**
+ * 获取某个提交中全部或指定路径内变更的文件。
  * @param repoRoot Git 仓库根目录。
  * @param commitHash 提交哈希。
+ * @param scopedPath 可选的仓库相对路径，用于限制返回范围。
  * @returns 文件变更列表。
  */
-export async function getCommitFiles(repoRoot: string, commitHash: string): Promise<ChangedFile[]> {
-  const output = await runGit(repoRoot, [
+export async function getCommitFiles(repoRoot: string, commitHash: string, scopedPath?: string): Promise<ChangedFile[]> {
+  const args = [
     'show',
     '--format=',
     '--name-status',
     '--find-renames',
     '--diff-merges=first-parent',
     commitHash
-  ]);
+  ];
+  if (scopedPath) {
+    args.push('--', scopedPath);
+  }
+  const output = await runGit(repoRoot, args);
   return parseChangedFiles(output);
 }
 
@@ -286,6 +386,35 @@ function createFileHistoryArgs(relativePath: string, options: FileHistoryOptions
 }
 
 /**
+ * 创建查询文件夹历史的 Git 参数。
+ * @param relativePath 文件夹相对仓库根目录的路径。
+ * @param options 文件历史查询选项。
+ * @param includeFullHistory 是否使用 full-history 查询。
+ * @returns Git log 参数列表。
+ */
+function createFolderHistoryArgs(relativePath: string, options: FileHistoryOptions, includeFullHistory: boolean): string[] {
+  const args = [
+    'log',
+    '--date=iso',
+    `--format=${COMMIT_SEPARATOR}%H${FIELD_SEPARATOR}%P${FIELD_SEPARATOR}%an${FIELD_SEPARATOR}%ad${FIELD_SEPARATOR}%B${FIELD_SEPARATOR}`,
+    '--name-status',
+    '--find-renames'
+  ];
+  if (includeFullHistory) {
+    args.splice(1, 0, '--full-history');
+  }
+  if (!options.includeMerges) {
+    args.push('--no-merges');
+  }
+  const since = getGitSinceValue(options.timeRange);
+  if (since) {
+    args.push(`--since=${since}`);
+  }
+  args.push('--', relativePath);
+  return args;
+}
+
+/**
  * 从 follow 历史中收集当前文件曾经使用过的旧路径。
  * @param relativePath 当前文件相对仓库根目录的路径。
  * @param commits follow 查询得到的提交历史。
@@ -304,9 +433,9 @@ function getHistoricalFilePaths(relativePath: string, commits: CommitHistoryItem
 }
 
 /**
- * 过滤掉 full-history 中没有实际改动当前文件任一路径的 merge commit。
+ * 过滤掉 full-history 中没有实际改动当前路径的 merge commit。
  * @param repoRoot Git 仓库根目录。
- * @param relativePaths 文件当前路径及历史路径。
+ * @param relativePaths 文件当前路径、历史路径或文件夹路径。
  * @param commits 候选提交列表。
  * @returns 过滤后的提交列表。
  */
@@ -327,9 +456,9 @@ async function filterMergeCommitsByPaths(
 }
 
 /**
- * 判断 merge commit 相对第一父提交是否实际改动了任一历史路径。
+ * 判断 merge commit 相对第一父提交是否实际改动了任一路径。
  * @param repoRoot Git 仓库根目录。
- * @param relativePaths 文件当前路径及历史路径。
+ * @param relativePaths 文件当前路径、历史路径或文件夹路径。
  * @param commitHash merge commit 哈希。
  * @returns 是否改动任一路径。
  */
@@ -366,11 +495,11 @@ async function mapWithConcurrencyLimit<T, R>(items: T[], limit: number, mapper: 
 }
 
 /**
- * 判断 merge commit 相对第一父提交是否实际改动了指定文件。
+ * 判断 merge commit 相对第一父提交是否实际改动了指定路径。
  * @param repoRoot Git 仓库根目录。
- * @param relativePath 文件相对仓库根目录的路径。
+ * @param relativePath 文件或文件夹相对仓库根目录的路径。
  * @param commitHash merge commit 哈希。
- * @returns 是否改动指定文件。
+ * @returns 是否改动指定路径。
  */
 async function mergeCommitTouchesPath(repoRoot: string, relativePath: string, commitHash: string): Promise<boolean> {
   const output = await runGit(repoRoot, [

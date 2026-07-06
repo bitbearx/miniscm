@@ -5,8 +5,8 @@ import * as vscode from 'vscode';
 import { sortChangedFilesByDirectory } from './changedFiles';
 import {
   getCommitFiles,
-  getFileHistory,
   getGitRefs,
+  getPathHistory,
   getRepositoryFileInfo,
   gitRefExists,
   runGit
@@ -102,7 +102,7 @@ class HistoryPanelManager {
   async show(resource?: vscode.Uri): Promise<void> {
     const target = this.resolveResource(resource);
     if (!target) {
-      vscode.window.showWarningMessage(this.i18n.t('error.noFile'));
+      vscode.window.showWarningMessage(this.i18n.t('error.noPath'));
       return;
     }
 
@@ -112,7 +112,7 @@ class HistoryPanelManager {
     }
 
     try {
-      const history = await getFileHistory(target.fsPath, DEFAULT_FILE_HISTORY_OPTIONS);
+      const history = await getPathHistory(target.fsPath, DEFAULT_FILE_HISTORY_OPTIONS);
       this.openPanel(target, history, DEFAULT_FILE_HISTORY_OPTIONS);
     } catch (error) {
       vscode.window.showErrorMessage(`${this.i18n.t('error.loadHistory')} ${formatError(error)}`);
@@ -136,6 +136,11 @@ class HistoryPanelManager {
     }
 
     try {
+      if (await this.isFolder(target)) {
+        vscode.window.showWarningMessage(this.i18n.t('error.noFile'));
+        return;
+      }
+
       const fileInfo = await getRepositoryFileInfo(target.fsPath);
       const selectedRef = await this.pickGitRef(fileInfo.repoRoot);
       if (!selectedRef) {
@@ -161,6 +166,16 @@ class HistoryPanelManager {
       return resource;
     }
     return vscode.window.activeTextEditor?.document.uri;
+  }
+
+  /**
+   * 判断本地 URI 是否指向文件夹。
+   * @param resource 本地文件 URI。
+   * @returns 是否为文件夹。
+   */
+  private async isFolder(resource: vscode.Uri): Promise<boolean> {
+    const stat = await vscode.workspace.fs.stat(resource);
+    return Boolean(stat.type & vscode.FileType.Directory);
   }
 
   /**
@@ -251,6 +266,7 @@ class HistoryPanelManager {
     const state: HistoryWebviewState = {
       fileName: path.basename(target.fsPath),
       relativePath: history.relativePath,
+      targetKind: history.targetKind,
       commits: history.commits,
       filesByCommit: {},
       options
@@ -276,7 +292,7 @@ class HistoryPanelManager {
         const options = normalizeFileHistoryOptions(message.type === 'reloadHistory' ? message.options : panelState.options);
         const requestId = message.type === 'reloadHistory' ? message.requestId ?? panelState.latestHistoryRequestId + 1 : panelState.latestHistoryRequestId + 1;
         panelState.latestHistoryRequestId = requestId;
-        const refreshed = await getFileHistory(target.fsPath, options);
+        const refreshed = await getPathHistory(target.fsPath, options);
         if (requestId !== panelState.latestHistoryRequestId) {
           return;
         }
@@ -285,7 +301,8 @@ class HistoryPanelManager {
       }
 
       if (message.type === 'loadCommitFiles') {
-        const files = await getCommitFiles(panelState.history.repoRoot, message.commitHash);
+        const scopedPath = panelState.history.targetKind === 'folder' ? panelState.history.relativePath : undefined;
+        const files = await getCommitFiles(panelState.history.repoRoot, message.commitHash, scopedPath);
         await panel.webview.postMessage({
           type: 'commitFiles',
           commitHash: message.commitHash,

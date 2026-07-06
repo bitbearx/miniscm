@@ -1,17 +1,19 @@
 # Mini SCM History
 
-Mini SCM History 是一个 TypeScript 编写的 VS Code 扩展，用于从文件右键菜单查看该文件的 Git 提交历史。
+Mini SCM History 是一个 TypeScript 编写的 VS Code 扩展，用于从文件或文件夹右键菜单查看对应路径的 Git 提交历史。
 
 ## 功能
 
-- 在资源管理器、编辑器正文或已打开文件的 tab 上右键本地文件，选择 **Show File Commit History / 查看文件提交历史**。
-- 在资源管理器、编辑器正文或已打开文件的 tab 上右键本地文件，选择 **Compare File with Ref / 与其他 Ref 对比**，可与分支、远程分支、标签或手动输入的 ref 进行差异对比。
+- 在资源管理器中右键本地文件或文件夹，选择 **Show File or Folder Commit History / 查看文件或文件夹提交历史**。
+- 在已打开文件的 tab 上右键本地文件，也可以选择 **Show File or Folder Commit History / 查看文件或文件夹提交历史** 查看当前文件历史。
+- 在资源管理器或已打开文件的 tab 上右键本地文件，选择 **Compare File with Ref / 与其他 Ref 对比**，可与分支、远程分支、标签或手动输入的 ref 进行差异对比。
 - 已打开文件的 tab 右键菜单中，这两个扩展命令会排在菜单靠后位置，避免影响关闭、固定等常用操作。
-- 在 Webview 中按行展示该文件最近 1 年且不包含 merge commit 的历史，减少默认查询成本。
-- 可勾选 **Include merge commits / 包含合并提交** 查看影响该文件的 merge commit，并用 **Merge / 合并** 标识区分。
+- 在 Webview 中按行展示该路径最近 1 年且不包含 merge commit 的历史，减少默认查询成本。
+- 文件夹历史按目录递归查询；点开某个 commit 后，变更文件列表仅展示所选文件夹内的文件。
+- 可勾选 **Include merge commits / 包含合并提交** 查看影响该路径的 merge commit，并用 **Merge / 合并** 标识区分。
 - 可按 commit hash、标题或描述搜索提交，并可快速切换最近 1/2/3/5 年或全部历史。
 - 点击 commit hash 可复制完整提交哈希，并显示短暂的复制成功提示。
-- 点击某个 commit 后，展示完整多行 commit 描述，并按目录排序逐行展示该提交变更的全部文件。
+- 点击某个 commit 后，展示完整多行 commit 描述，并按目录排序逐行展示该提交变更的文件。
 - 每个文件提供两个操作：
   - **Change / 变更**：查看该 commit 对这个文件造成的修改。
   - **Compare with Latest / 与最新版对比**：将该 commit 中的文件版本与当前最新版对比。
@@ -46,7 +48,7 @@ npx @vscode/vsce package --allow-missing-repository
 code --install-extension miniscm-0.0.1.vsix
 ```
 
-如果终端中没有 `code` 命令，可以在 VS Code 中打开命令面板，执行 **Shell Command: Install 'code' command in PATH**，再重新运行安装命令。安装完成后重启或刷新 VS Code，在 Git 仓库中的本地文件上右键即可使用扩展命令。
+如果终端中没有 `code` 命令，可以在 VS Code 中打开命令面板，执行 **Shell Command: Install 'code' command in PATH**，再重新运行安装命令。安装完成后重启或刷新 VS Code，在 Git 仓库中的本地文件或文件夹上右键即可使用扩展命令。
 
 ## 目录结构
 

@@ -7,12 +7,13 @@ const MESSAGES = {
     'action.refresh': 'Refresh',
     'aria.loadFiles': 'Load changed files',
     'error.loadRefs': 'Failed to load Git refs.',
-    'empty.noCommits': 'No commits found for this file.',
+    'empty.noCommits': 'No commits found for this path.',
     'empty.noMatches': 'No matching commits.',
     'error.loadCommitFiles': 'Failed to load changed files.',
-    'error.loadHistory': 'Failed to load file history.',
+    'error.loadHistory': 'Failed to load path history.',
     'error.copyHash': 'Failed to copy commit hash.',
     'error.noFile': 'Select a file first.',
+    'error.noPath': 'Select a file or folder first.',
     'error.invalidRef': 'Git ref "{0}" does not exist.',
     'error.unsupportedScheme': 'Only local files can be inspected.',
     'label.author': 'Author',
@@ -30,7 +31,7 @@ const MESSAGES = {
     'placeholder.enterRef': 'Enter branch, tag, commit hash, or other ref',
     'placeholder.searchCommits': 'Search commits',
     'placeholder.selectRef': 'Select a branch, tag, or ref to compare',
-    'panel.title': 'File History: {0}',
+    'panel.title': 'Path History: {0}',
     'refType.branch': 'Branch',
     'refType.remote': 'Remote branch',
     'refType.tag': 'Tag',
@@ -43,7 +44,7 @@ const MESSAGES = {
     'timeRange.5': 'Last 5 years',
     'timeRange.all': 'All time',
     'toast.copied': 'Copied',
-    'webview.title': 'File Commit History'
+    'webview.title': 'Path Commit History'
   },
   zh: {
     'action.change': '变更',
@@ -53,12 +54,13 @@ const MESSAGES = {
     'action.refresh': '刷新',
     'aria.loadFiles': '加载变更文件',
     'error.loadRefs': '加载 Git Ref 失败。',
-    'empty.noCommits': '没有找到该文件的提交历史。',
+    'empty.noCommits': '没有找到该路径的提交历史。',
     'empty.noMatches': '没有匹配的提交。',
     'error.loadCommitFiles': '加载变更文件失败。',
-    'error.loadHistory': '加载文件历史失败。',
+    'error.loadHistory': '加载路径历史失败。',
     'error.copyHash': '复制提交哈希失败。',
     'error.noFile': '请先选择一个文件。',
+    'error.noPath': '请先选择一个文件或文件夹。',
     'error.invalidRef': 'Git Ref “{0}” 不存在。',
     'error.unsupportedScheme': '只能查看本地文件。',
     'label.author': '作者',
@@ -76,7 +78,7 @@ const MESSAGES = {
     'placeholder.enterRef': '输入分支、标签、提交哈希或其他 Ref',
     'placeholder.searchCommits': '搜索提交',
     'placeholder.selectRef': '选择要对比的分支、标签或 Ref',
-    'panel.title': '文件历史：{0}',
+    'panel.title': '路径历史：{0}',
     'refType.branch': '分支',
     'refType.remote': '远程分支',
     'refType.tag': '标签',
@@ -89,7 +91,7 @@ const MESSAGES = {
     'timeRange.5': '最近 5 年',
     'timeRange.all': '全部',
     'toast.copied': '复制成功',
-    'webview.title': '文件提交历史'
+    'webview.title': '路径提交历史'
   }
 } as const;
 

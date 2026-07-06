@@ -10,6 +10,7 @@ import {
   getCommitFiles,
   getFileHistory,
   getGitRefs,
+  getPathHistory,
   getRepositoryFileInfo,
   gitRefExists,
   parseChangedFiles,
@@ -297,6 +298,82 @@ test('getFileHistory defaults to the last year and can include all history', asy
   );
 });
 
+test('getPathHistory reads recursive folder history and excludes outside commits', async () => {
+  const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'miniscm-folder-history-'));
+  const srcPath = path.join(repoRoot, 'src');
+  const srcFilePath = path.join(srcPath, 'hello.txt');
+  const nestedFilePath = path.join(srcPath, 'nested', 'world.txt');
+  const outsideFilePath = path.join(repoRoot, 'README.md');
+
+  await runGit(repoRoot, ['init']);
+  await runGit(repoRoot, ['config', 'user.email', 'tester@example.com']);
+  await runGit(repoRoot, ['config', 'user.name', 'Test User']);
+
+  await fs.mkdir(path.dirname(nestedFilePath), { recursive: true });
+  await fs.writeFile(srcFilePath, 'hello\n', 'utf8');
+  await runGit(repoRoot, ['add', '.']);
+  await runGit(repoRoot, ['commit', '-m', 'Add src file']);
+
+  await fs.writeFile(outsideFilePath, 'outside\n', 'utf8');
+  await runGit(repoRoot, ['add', '.']);
+  await runGit(repoRoot, ['commit', '-m', 'Add outside file']);
+
+  await fs.writeFile(nestedFilePath, 'world\n', 'utf8');
+  await runGit(repoRoot, ['add', '.']);
+  await runGit(repoRoot, ['commit', '-m', 'Add nested src file']);
+
+  const history = await getPathHistory(srcPath);
+
+  assert.equal(history.repoRoot, await fs.realpath(repoRoot));
+  assert.equal(history.relativePath, 'src');
+  assert.equal(history.targetKind, 'folder');
+  assert.deepEqual(
+    history.commits.map((commit) => commit.subject),
+    ['Add nested src file', 'Add src file']
+  );
+});
+
+test('getPathHistory represents repository root folders as dot', async () => {
+  const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'miniscm-root-folder-history-'));
+  const filePath = path.join(repoRoot, 'hello.txt');
+
+  await runGit(repoRoot, ['init']);
+  await runGit(repoRoot, ['config', 'user.email', 'tester@example.com']);
+  await runGit(repoRoot, ['config', 'user.name', 'Test User']);
+  await fs.writeFile(filePath, 'hello\n', 'utf8');
+  await runGit(repoRoot, ['add', '.']);
+  await runGit(repoRoot, ['commit', '-m', 'Add root file']);
+
+  const history = await getPathHistory(repoRoot);
+
+  assert.equal(history.relativePath, '.');
+  assert.equal(history.targetKind, 'folder');
+  assert.deepEqual(
+    history.commits.map((commit) => commit.subject),
+    ['Add root file']
+  );
+});
+
+test('getCommitFiles can limit changed files to a folder scope', async () => {
+  const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'miniscm-commit-files-scope-'));
+  const srcFilePath = path.join(repoRoot, 'src', 'hello.txt');
+  const outsideFilePath = path.join(repoRoot, 'README.md');
+
+  await runGit(repoRoot, ['init']);
+  await runGit(repoRoot, ['config', 'user.email', 'tester@example.com']);
+  await runGit(repoRoot, ['config', 'user.name', 'Test User']);
+  await fs.mkdir(path.dirname(srcFilePath), { recursive: true });
+  await fs.writeFile(srcFilePath, 'hello\n', 'utf8');
+  await fs.writeFile(outsideFilePath, 'outside\n', 'utf8');
+  await runGit(repoRoot, ['add', '.']);
+  await runGit(repoRoot, ['commit', '-m', 'Add files']);
+  const commitHash = (await runGit(repoRoot, ['rev-parse', 'HEAD'])).trim();
+
+  assert.deepEqual(await getCommitFiles(repoRoot, commitHash, 'src'), [
+    { status: 'A', path: 'src/hello.txt', oldPath: undefined }
+  ]);
+});
+
 test('getRepositoryFileInfo resolves repo root and relative path without file history', async () => {
   const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'miniscm-file-info-'));
   const filePath = path.join(repoRoot, 'src', 'draft.txt');
@@ -308,6 +385,16 @@ test('getRepositoryFileInfo resolves repo root and relative path without file hi
   const fileInfo = await getRepositoryFileInfo(filePath);
   assert.equal(fileInfo.repoRoot, await fs.realpath(repoRoot));
   assert.equal(fileInfo.relativePath, 'src/draft.txt');
+});
+
+test('getRepositoryFileInfo rejects folder paths', async () => {
+  const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'miniscm-file-info-folder-'));
+  const folderPath = path.join(repoRoot, 'src');
+  await fs.mkdir(folderPath, { recursive: true });
+
+  await runGit(repoRoot, ['init']);
+
+  await assert.rejects(getRepositoryFileInfo(folderPath), /Expected a file path/);
 });
 
 test('getGitRefs reads real branches and tags', async () => {
