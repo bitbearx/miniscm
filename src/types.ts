@@ -74,6 +74,21 @@ export interface GitBlobEntry {
   label: string;
 }
 
+/** 单个 Git commit 的详情信息。 */
+export interface GitCommitDetails {
+  repoRoot: string;
+  hash: string;
+  shortHash: string;
+  author: string;
+  authorDate: string;
+  subject: string;
+  message: string;
+  githubUrl?: string;
+}
+
+/** 指定文件行对应的 Git blame 提交信息。 */
+export interface GitLineBlame extends GitCommitDetails {}
+
 /** 与指定 Git ref 对比时所需的 diff 输入描述。 */
 export interface RefDiffDescriptor {
   left: GitBlobEntry;

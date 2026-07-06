@@ -2,9 +2,11 @@ import path from 'node:path';
 
 import * as vscode from 'vscode';
 
+import { LineBlameStatusManager } from './blameStatus';
 import { sortChangedFilesByDirectory } from './changedFiles';
 import {
   getCommitFiles,
+  getCommitDetails,
   getGitRefs,
   getPathHistory,
   getRepositoryFileInfo,
@@ -15,8 +17,8 @@ import { normalizeFileHistoryOptions } from './historyOptions';
 import { createI18n, type I18n } from './i18n';
 import { createHistoryPanelOptions } from './panelOptions';
 import { createRefDiffDescriptor } from './refDiff';
-import { DEFAULT_FILE_HISTORY_OPTIONS, type ChangedFile, type FileHistoryOptions, type FileHistoryResult, type GitBlobEntry, type GitRef, type GitRefType } from './types';
-import { createHistoryHtml, type HistoryWebviewState } from './webview';
+import { DEFAULT_FILE_HISTORY_OPTIONS, type ChangedFile, type FileHistoryOptions, type FileHistoryResult, type GitBlobEntry, type GitCommitDetails, type GitRef, type GitRefType } from './types';
+import { createCommitDetailsHtml, createHistoryHtml, type HistoryWebviewState } from './webview';
 
 const BLOB_SCHEME = 'miniscm-git';
 const EMPTY_REF = '__MINISCM_EMPTY__';
@@ -32,9 +34,16 @@ type WebviewMessage =
   | { type: 'refresh' }
   | { type: 'reloadHistory'; options?: Partial<FileHistoryOptions>; requestId?: number }
   | { type: 'loadCommitFiles'; commitHash: string }
+  | { type: 'openCommitDetails'; commitHash: string }
   | { type: 'copyCommitHash'; commitHash: string }
   | { type: 'showChange'; commitHash: string; file: ChangedFile }
   | { type: 'compareLatest'; commitHash: string; file: ChangedFile };
+
+/** 打开 commit 详情命令的参数。 */
+interface OpenCommitDetailsCommandArgs {
+  repoRoot?: string;
+  commitHash?: string;
+}
 
 /** 单个文件历史面板的可变状态。 */
 interface OpenHistoryPanelState {
@@ -157,6 +166,29 @@ class HistoryPanelManager {
   }
 
   /**
+   * 打开指定 commit 的详情面板。
+   * @param args 命令参数，包含仓库根目录与提交哈希。
+   */
+  async openCommitDetails(args?: OpenCommitDetailsCommandArgs): Promise<void> {
+    const repoRoot = args?.repoRoot;
+    const commitHash = args?.commitHash;
+    if (!repoRoot || !commitHash) {
+      vscode.window.showWarningMessage(this.i18n.t('error.noCommit'));
+      return;
+    }
+
+    try {
+      const [commit, files] = await Promise.all([
+        getCommitDetails(repoRoot, commitHash),
+        getCommitFiles(repoRoot, commitHash)
+      ]);
+      this.openCommitDetailsPanel(repoRoot, commit, sortChangedFilesByDirectory(files));
+    } catch (error) {
+      vscode.window.showErrorMessage(`${this.i18n.t('error.loadCommitDetails')} ${formatError(error)}`);
+    }
+  }
+
+  /**
    * 根据命令参数或当前编辑器推导目标文件。
    * @param resource 命令参数中的 URI。
    * @returns 目标文件 URI。
@@ -275,6 +307,48 @@ class HistoryPanelManager {
   }
 
   /**
+   * 创建并初始化 commit 详情 Webview。
+   * @param repoRoot Git 仓库根目录。
+   * @param commit commit 详情。
+   * @param files commit 变更文件。
+   */
+  private openCommitDetailsPanel(repoRoot: string, commit: GitCommitDetails, files: ChangedFile[]): void {
+    const panel = vscode.window.createWebviewPanel(
+      'miniscm.commitDetails',
+      this.i18n.t('webview.commitDetailsTitle'),
+      vscode.ViewColumn.Beside,
+      createHistoryPanelOptions(this.context.extensionUri)
+    );
+
+    panel.webview.html = createCommitDetailsHtml(panel.webview, { commit, files }, this.i18n);
+    const disposable = panel.webview.onDidReceiveMessage((message: WebviewMessage) => {
+      void this.handleCommitDetailsMessage(repoRoot, commit.hash, message);
+    });
+    panel.onDidDispose(() => disposable.dispose());
+  }
+
+  /**
+   * 处理 commit 详情 Webview 中的用户操作。
+   * @param repoRoot Git 仓库根目录。
+   * @param commitHash 当前 commit 哈希。
+   * @param message Webview 消息。
+   */
+  private async handleCommitDetailsMessage(repoRoot: string, commitHash: string, message: WebviewMessage): Promise<void> {
+    try {
+      if (message.type === 'copyCommitHash') {
+        await vscode.env.clipboard.writeText(message.commitHash);
+        return;
+      }
+
+      if (message.type === 'showChange') {
+        await this.showChange(repoRoot, commitHash, message.file);
+      }
+    } catch (error) {
+      vscode.window.showErrorMessage(`${this.i18n.t('error.loadCommitFiles')} ${formatError(error)}`);
+    }
+  }
+
+  /**
    * 处理 Webview 中的用户操作。
    * @param panel 当前 Webview 面板。
    * @param target 当前查看的文件 URI。
@@ -308,6 +382,11 @@ class HistoryPanelManager {
           commitHash: message.commitHash,
           files: sortChangedFilesByDirectory(files)
         });
+        return;
+      }
+
+      if (message.type === 'openCommitDetails') {
+        await this.openCommitDetails({ repoRoot: panelState.history.repoRoot, commitHash: message.commitHash });
         return;
       }
 
@@ -479,6 +558,8 @@ export function activate(context: vscode.ExtensionContext): void {
   const i18n = createI18n(vscode.env.language);
   const blobProvider = new GitBlobContentProvider();
   const historyPanels = new HistoryPanelManager(context, i18n, blobProvider);
+  const blameStatus = new LineBlameStatusManager(i18n);
+  blameStatus.register(context);
 
   context.subscriptions.push(
     vscode.workspace.registerTextDocumentContentProvider(BLOB_SCHEME, blobProvider),
@@ -487,6 +568,9 @@ export function activate(context: vscode.ExtensionContext): void {
     }),
     vscode.commands.registerCommand('miniscm.compareFileWithRef', (resource?: vscode.Uri) => {
       void historyPanels.compareFileWithRef(resource);
+    }),
+    vscode.commands.registerCommand('miniscm.openCommitDetails', (args?: OpenCommitDetailsCommandArgs) => {
+      void historyPanels.openCommitDetails(args);
     })
   );
 }

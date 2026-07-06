@@ -8,6 +8,8 @@ import type {
   CommitHistoryItem,
   FileHistoryOptions,
   FileHistoryResult,
+  GitCommitDetails,
+  GitLineBlame,
   GitRef,
   GitRefType,
   HistoryTargetKind,
@@ -319,6 +321,206 @@ export async function gitRefExists(repoRoot: string, ref: string): Promise<boole
   } catch {
     return false;
   }
+}
+
+/**
+ * 获取本地文件指定行对应的 Git blame 提交信息。
+ * @param filePath 文件绝对路径。
+ * @param lineNumber 1-based 行号。
+ * @returns 指定行的提交信息。
+ */
+export async function getLineBlame(filePath: string, lineNumber: number): Promise<GitLineBlame> {
+  if (!Number.isInteger(lineNumber) || lineNumber < 1) {
+    throw new Error('Line number must be a positive integer.');
+  }
+
+  const { repoRoot, relativePath } = await getRepositoryFileInfo(filePath);
+  const blameOutput = await runGit(repoRoot, ['blame', '--line-porcelain', '-L', `${lineNumber},${lineNumber}`, '--', relativePath]);
+  const blame = parseLineBlamePorcelain(blameOutput);
+
+  if (isUncommittedBlameHash(blame.hash)) {
+    return {
+      repoRoot,
+      hash: blame.hash,
+      shortHash: blame.hash.slice(0, 8),
+      author: blame.author,
+      authorDate: blame.authorDate,
+      subject: blame.summary,
+      message: blame.summary
+    };
+  }
+
+  return getCommitDetails(repoRoot, blame.hash);
+}
+
+/**
+ * 根据 GitHub remote URL 和提交哈希创建 commit 页面链接。
+ * @param remoteUrl Git remote URL。
+ * @param commitHash 提交哈希。
+ * @returns GitHub commit URL；非 GitHub remote 返回 undefined。
+ */
+export function createGitHubCommitUrl(remoteUrl: string, commitHash: string): string | undefined {
+  const repositoryPath = getGitHubRepositoryPath(remoteUrl);
+  return repositoryPath ? `https://github.com/${repositoryPath}/commit/${commitHash}` : undefined;
+}
+
+/**
+ * 从仓库 origin remote 推导 GitHub commit URL。
+ * @param repoRoot Git 仓库根目录。
+ * @param commitHash 提交哈希。
+ * @returns GitHub commit URL；没有 GitHub remote 时返回 undefined。
+ */
+async function getGitHubCommitUrlForRepo(repoRoot: string, commitHash: string): Promise<string | undefined> {
+  try {
+    const remoteUrl = (await runGit(repoRoot, ['remote', 'get-url', 'origin'])).trim();
+    return createGitHubCommitUrl(remoteUrl, commitHash);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * 读取单个提交的展示详情。
+ * @param repoRoot Git 仓库根目录。
+ * @param commitHash 提交哈希。
+ * @returns 提交详情。
+ */
+export async function getCommitDetails(repoRoot: string, commitHash: string): Promise<GitCommitDetails> {
+  const output = await runGit(repoRoot, ['show', '-s', '--format=%H%x1f%an%x1f%aI%x1f%B', commitHash]);
+  const [hash = commitHash, author = '', authorDate = '', ...messageParts] = output.trimEnd().split(FIELD_SEPARATOR);
+  const message = messageParts.join(FIELD_SEPARATOR).trimEnd();
+  const subject = message.split(/\r?\n/)[0] || '';
+  return {
+    repoRoot,
+    hash,
+    shortHash: hash.slice(0, 8),
+    author,
+    authorDate,
+    subject,
+    message: message || subject,
+    githubUrl: await getGitHubCommitUrlForRepo(repoRoot, hash)
+  };
+}
+
+/** git blame porcelain 中与状态栏展示相关的字段。 */
+interface LineBlamePorcelain {
+  hash: string;
+  author: string;
+  authorDate: string;
+  summary: string;
+}
+
+/**
+ * 解析 git blame --line-porcelain 单行输出。
+ * @param output Git blame porcelain 输出。
+ * @returns 指定行的 blame 字段。
+ */
+function parseLineBlamePorcelain(output: string): LineBlamePorcelain {
+  const lines = output.split(/\r?\n/);
+  const [hash = ''] = (lines[0] ?? '').split(' ');
+  const fields = new Map<string, string>();
+
+  for (const line of lines.slice(1)) {
+    const separator = line.indexOf(' ');
+    if (separator <= 0) {
+      continue;
+    }
+    fields.set(line.slice(0, separator), line.slice(separator + 1));
+  }
+
+  if (!hash) {
+    throw new Error('No blame information found for this line.');
+  }
+
+  return {
+    hash,
+    author: fields.get('author') ?? '',
+    authorDate: createIsoDateFromGitTimestamp(fields.get('author-time'), fields.get('author-tz')),
+    summary: fields.get('summary') ?? ''
+  };
+}
+
+/**
+ * 将 Git blame 中的 Unix 秒级时间和时区转换为 ISO 日期。
+ * @param secondsText Unix 秒级时间。
+ * @param timezone Git 时区，例如 +0800。
+ * @returns ISO 日期字符串。
+ */
+function createIsoDateFromGitTimestamp(secondsText?: string, timezone?: string): string {
+  const seconds = Number(secondsText);
+  if (!Number.isFinite(seconds)) {
+    return '';
+  }
+
+  if (!timezone || !/^[+-]\d{4}$/.test(timezone)) {
+    return new Date(seconds * 1000).toISOString();
+  }
+
+  const sign = timezone.startsWith('-') ? -1 : 1;
+  const hours = Number(timezone.slice(1, 3));
+  const minutes = Number(timezone.slice(3, 5));
+  const offsetMinutes = sign * (hours * 60 + minutes);
+  const localDate = new Date(seconds * 1000 + offsetMinutes * 60 * 1000);
+  return [
+    `${localDate.getUTCFullYear()}-${padDatePart(localDate.getUTCMonth() + 1)}-${padDatePart(localDate.getUTCDate())}`,
+    `T${padDatePart(localDate.getUTCHours())}:${padDatePart(localDate.getUTCMinutes())}:${padDatePart(localDate.getUTCSeconds())}`,
+    `${timezone.slice(0, 3)}:${timezone.slice(3, 5)}`
+  ].join('');
+}
+
+/**
+ * 补齐日期时间字段到两位。
+ * @param value 日期时间数字。
+ * @returns 两位数字文本。
+ */
+function padDatePart(value: number): string {
+  return String(value).padStart(2, '0');
+}
+
+/**
+ * 判断 blame 哈希是否代表尚未提交的工作区内容。
+ * @param hash blame 输出中的提交哈希。
+ * @returns 是否为未提交内容。
+ */
+function isUncommittedBlameHash(hash: string): boolean {
+  return /^0+$/.test(hash);
+}
+
+/**
+ * 从 remote URL 中提取 GitHub 仓库路径。
+ * @param remoteUrl Git remote URL。
+ * @returns owner/repo 路径；非 GitHub remote 返回 undefined。
+ */
+function getGitHubRepositoryPath(remoteUrl: string): string | undefined {
+  const trimmed = remoteUrl.trim();
+  const scpLikeMatch = /^git@github\.com:([^/]+)\/(.+)$/i.exec(trimmed);
+  if (scpLikeMatch) {
+    return normalizeGitHubRepositoryPath(scpLikeMatch[1], scpLikeMatch[2]);
+  }
+
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.hostname.toLowerCase() !== 'github.com') {
+      return undefined;
+    }
+    const [owner, repo] = parsed.pathname.replace(/^\/+/, '').split('/');
+    return normalizeGitHubRepositoryPath(owner, repo);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * 规范化 GitHub 仓库 owner/repo 路径。
+ * @param owner GitHub owner。
+ * @param repo GitHub repo。
+ * @returns 规范化后的 owner/repo。
+ */
+function normalizeGitHubRepositoryPath(owner?: string, repo?: string): string | undefined {
+  if (!owner || !repo) {
+    return undefined;
+  }
+  return `${owner}/${repo.replace(/\.git$/i, '')}`;
 }
 
 /**

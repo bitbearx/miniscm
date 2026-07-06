@@ -1,6 +1,6 @@
 {
   "extension.displayName": "Mini SCM 历史",
-  "extension.description": "通过右键菜单浏览文件或文件夹的 Git 提交历史，并将文件与提交或 Ref 中的版本进行对比。",
+  "extension.description": "浏览 Git 历史、打开带文件差异的提交详情、将文件与提交或 Ref 对比，并在状态栏查看行级 Blame。",
   "command.category": "Mini SCM",
   "command.showFileHistory": "查看文件或文件夹提交历史",
   "command.compareFileWithRef": "与其他 Ref 对比"

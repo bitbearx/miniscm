@@ -1,6 +1,6 @@
 import type * as vscode from 'vscode';
 
-import type { ChangedFile, CommitHistoryItem, FileHistoryOptions, HistoryTargetKind, HistoryTimeRange } from './types';
+import type { ChangedFile, CommitHistoryItem, FileHistoryOptions, GitCommitDetails, HistoryTargetKind, HistoryTimeRange } from './types';
 import type { I18n } from './i18n';
 
 /** Webview 初始渲染所需的数据。 */
@@ -11,6 +11,12 @@ export interface HistoryWebviewState {
   commits: CommitHistoryItem[];
   filesByCommit: Record<string, ChangedFile[]>;
   options: FileHistoryOptions;
+}
+
+/** Commit 详情 Webview 初始渲染所需的数据。 */
+export interface CommitDetailsWebviewState {
+  commit: GitCommitDetails;
+  files: ChangedFile[];
 }
 
 /**
@@ -48,6 +54,7 @@ export function createHistoryHtml(webview: vscode.Webview, state: HistoryWebview
     actionChange: i18n.t('action.change'),
     actionCompareLatest: i18n.t('action.compareLatest'),
     actionCopyHash: i18n.t('action.copyHash'),
+    actionOpenCommitDetails: i18n.t('action.openCommitDetails'),
     actionRefresh: i18n.t('action.refresh'),
     ariaLoadFiles: i18n.t('aria.loadFiles'),
     changedFiles: i18n.t('label.changedFiles'),
@@ -253,7 +260,7 @@ export function createHistoryHtml(webview: vscode.Webview, state: HistoryWebview
       font-size: 12px;
     }
 
-    .hash-copy {
+    .hash-open {
       flex: 0 0 auto;
       margin: 0;
       padding: 0;
@@ -264,7 +271,7 @@ export function createHistoryHtml(webview: vscode.Webview, state: HistoryWebview
       cursor: pointer;
     }
 
-    .hash-copy:hover {
+    .hash-open:hover {
       color: var(--vscode-textLink-activeForeground);
       background: transparent;
       text-decoration: underline;
@@ -317,6 +324,12 @@ export function createHistoryHtml(webview: vscode.Webview, state: HistoryWebview
       white-space: pre-wrap;
       overflow-wrap: anywhere;
       line-height: 1.45;
+    }
+
+    .commit-detail-actions {
+      padding: 8px 14px 0;
+      background: var(--vscode-editorWidget-background);
+      border-top: 1px solid var(--vscode-panel-border);
     }
 
     .files {
@@ -547,6 +560,12 @@ export function createHistoryHtml(webview: vscode.Webview, state: HistoryWebview
           }
         });
       });
+      app.querySelectorAll('[data-action="openCommit"]').forEach((button) => {
+        button.addEventListener('click', (event) => {
+          event.stopPropagation();
+          vscode.postMessage({ type: 'openCommitDetails', commitHash: button.dataset.commitHash });
+        });
+      });
       app.querySelectorAll('[data-action="copyHash"]').forEach((button) => {
         button.addEventListener('click', copyCommitHash);
       });
@@ -600,7 +619,7 @@ export function createHistoryHtml(webview: vscode.Webview, state: HistoryWebview
     }
 
     function renderCommitHash(commit) {
-      return '<button class="hash-copy" data-action="copyHash" data-commit-hash="' + escapeAttr(commit.hash) + '" title="' + escapeAttr(state.labels.actionCopyHash) + '" aria-label="' + escapeAttr(state.labels.actionCopyHash) + '">' +
+      return '<button class="hash-open" data-action="openCommit" data-commit-hash="' + escapeAttr(commit.hash) + '" title="' + escapeAttr(state.labels.actionOpenCommitDetails) + '" aria-label="' + escapeAttr(state.labels.actionOpenCommitDetails) + '">' +
         '<span class="hash">' + escapeHtml(commit.shortHash) + '</span>' +
       '</button>';
     }
@@ -623,10 +642,11 @@ export function createHistoryHtml(webview: vscode.Webview, state: HistoryWebview
 
     function renderCommitMessage(commit) {
       const message = String(commit.message || commit.subject || '').trim();
+      const actions = '<div class="commit-detail-actions"><button data-action="copyHash" data-commit-hash="' + escapeAttr(commit.hash) + '">' + escapeHtml(state.labels.actionCopyHash) + '</button></div>';
       if (!message || message === commit.subject) {
-        return '';
+        return actions;
       }
-      return '<div class="commit-message">' + escapeHtml(message) + '</div>';
+      return actions + '<div class="commit-message">' + escapeHtml(message) + '</div>';
     }
 
     function renderFiles(commitHash, files) {
@@ -702,6 +722,189 @@ export function createHistoryHtml(webview: vscode.Webview, state: HistoryWebview
 }
 
 /**
+ * 创建 commit 详情 Webview 的完整 HTML。
+ * @param webview VS Code Webview 实例。
+ * @param state 初始渲染状态。
+ * @param i18n 本地化工具。
+ * @returns HTML 字符串。
+ */
+export function createCommitDetailsHtml(webview: vscode.Webview, state: CommitDetailsWebviewState, i18n: I18n): string {
+  const nonce = createNonce();
+  const labels = {
+    actionChange: i18n.t('action.change'),
+    actionCopyHash: i18n.t('action.copyHash'),
+    actionOpenInGitHub: i18n.t('action.openInGitHub'),
+    author: i18n.t('label.author'),
+    changedFiles: i18n.t('label.changedFiles'),
+    commit: i18n.t('label.commit'),
+    date: i18n.t('label.date'),
+    title: i18n.t('webview.commitDetailsTitle')
+  };
+  const bootState = serializeForScript({ commit: state.commit });
+  const githubLink = state.commit.githubUrl
+    ? `<a href="${escapeHtml(state.commit.githubUrl)}" rel="noreferrer noopener">${escapeHtml(labels.actionOpenInGitHub)}</a>`
+    : '';
+
+  return /* html */ `<!DOCTYPE html>
+<html lang="${i18n.language}">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${webview.cspSource} https:; style-src 'nonce-${nonce}'; script-src 'nonce-${nonce}';">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>${escapeHtml(labels.title)}</title>
+  <style nonce="${nonce}">
+    :root {
+      color-scheme: light dark;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      color: var(--vscode-foreground);
+      background: var(--vscode-editor-background);
+      font-family: var(--vscode-font-family);
+      font-size: var(--vscode-font-size);
+    }
+
+    .shell {
+      min-height: 100vh;
+    }
+
+    .header {
+      padding: 14px;
+      border-bottom: 1px solid var(--vscode-panel-border);
+      background: var(--vscode-sideBar-background);
+    }
+
+    .title {
+      margin: 0;
+      font-size: 16px;
+      font-weight: 600;
+      overflow-wrap: anywhere;
+    }
+
+    .meta {
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+      margin-top: 8px;
+      color: var(--vscode-descriptionForeground);
+      font-size: 12px;
+    }
+
+    .hash {
+      color: var(--vscode-textLink-foreground);
+      font-family: var(--vscode-editor-font-family);
+    }
+
+    .message {
+      margin: 0;
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--vscode-panel-border);
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      line-height: 1.45;
+    }
+
+    .section-title {
+      padding: 10px 14px 6px;
+      color: var(--vscode-descriptionForeground);
+      font-weight: 600;
+    }
+
+    .file-row {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      align-items: center;
+      gap: 10px;
+      min-height: 30px;
+      padding: 3px 14px;
+      border-top: 1px solid var(--vscode-panel-border);
+    }
+
+    .file-main {
+      min-width: 0;
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      overflow: hidden;
+    }
+
+    .status {
+      min-width: 28px;
+      padding: 1px 5px;
+      border-radius: 3px;
+      color: var(--vscode-badge-foreground);
+      background: var(--vscode-badge-background);
+      font-family: var(--vscode-editor-font-family);
+      font-size: 11px;
+      text-align: center;
+    }
+
+    .file-path-name {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    button {
+      border: 1px solid var(--vscode-panel-border);
+      border-radius: 3px;
+      padding: 2px 7px;
+      color: var(--vscode-foreground);
+      background: transparent;
+      font: inherit;
+      cursor: pointer;
+    }
+
+    button:hover {
+      background: var(--vscode-toolbar-hoverBackground);
+    }
+
+    a {
+      color: var(--vscode-textLink-foreground);
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <header class="header">
+      <h1 class="title">${escapeHtml(state.commit.subject || labels.title)}</h1>
+      <div class="meta">
+        <span>${escapeHtml(labels.author)}: ${escapeHtml(state.commit.author)}</span>
+        <span>${escapeHtml(labels.date)}: ${escapeHtml(state.commit.authorDate)}</span>
+        <span>${escapeHtml(labels.commit)}: <span class="hash">${escapeHtml(state.commit.shortHash)}</span></span>
+        <button data-action="copyHash">${escapeHtml(labels.actionCopyHash)}</button>
+        ${githubLink}
+      </div>
+    </header>
+    <pre class="message">${escapeHtml(state.commit.message || state.commit.subject)}</pre>
+    <div class="section-title">${escapeHtml(labels.changedFiles)}</div>
+    <main>
+      ${state.files.map((file) => renderCommitDetailsFileRow(file, labels.actionChange)).join('')}
+    </main>
+  </div>
+  <script nonce="${nonce}">
+    const vscode = acquireVsCodeApi();
+    const state = ${bootState};
+    document.querySelector('[data-action="copyHash"]')?.addEventListener('click', () => {
+      vscode.postMessage({ type: 'copyCommitHash', commitHash: state.commit.hash });
+    });
+    document.querySelectorAll('[data-action="change"]').forEach((button) => {
+      button.addEventListener('click', () => {
+        vscode.postMessage({ type: 'showChange', commitHash: state.commit.hash, file: JSON.parse(button.dataset.file) });
+      });
+    });
+  </script>
+</body>
+</html>`;
+}
+
+/**
  * 转义 HTML 文本，避免文件名和提交信息影响页面结构。
  * @param value 原始值。
  * @returns 转义后的 HTML 文本。
@@ -713,4 +916,22 @@ function escapeHtml(value: unknown): string {
     .replaceAll('>', '&gt;')
     .replaceAll('"', '&quot;')
     .replaceAll("'", '&#39;');
+}
+
+/**
+ * 渲染 commit 详情中的单个变更文件。
+ * @param file 变更文件。
+ * @param actionLabel diff 按钮文案。
+ * @returns 文件行 HTML。
+ */
+function renderCommitDetailsFileRow(file: ChangedFile, actionLabel: string): string {
+  const fileData = escapeHtml(JSON.stringify(file));
+  const label = file.oldPath && file.oldPath !== file.path ? `${file.oldPath} → ${file.path}` : file.path;
+  return '<div class="file-row">' +
+    '<div class="file-main">' +
+      '<span class="status">' + escapeHtml(file.status) + '</span>' +
+      '<span class="file-path-name" title="' + escapeHtml(label) + '">' + escapeHtml(label) + '</span>' +
+    '</div>' +
+    '<button data-action="change" data-file="' + fileData + '">' + escapeHtml(actionLabel) + '</button>' +
+  '</div>';
 }

@@ -19,6 +19,8 @@ test('package contributes path history and file compare context menus', () => {
   );
 
   assert.ok(packageJson.activationEvents.includes('onCommand:miniscm.compareFileWithRef'));
+  assert.ok(packageJson.activationEvents.includes('onCommand:miniscm.openCommitDetails'));
+  assert.ok(packageJson.activationEvents.includes('onStartupFinished'));
   assert.ok(commands.includes('miniscm.compareFileWithRef'));
   assert.ok(explorerCommands.includes('miniscm.compareFileWithRef'));
   assert.equal(

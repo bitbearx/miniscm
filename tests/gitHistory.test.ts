@@ -7,9 +7,11 @@ import test from 'node:test';
 import { promisify } from 'node:util';
 
 import {
+  createGitHubCommitUrl,
   getCommitFiles,
   getFileHistory,
   getGitRefs,
+  getLineBlame,
   getPathHistory,
   getRepositoryFileInfo,
   gitRefExists,
@@ -136,6 +138,22 @@ test('parseGitRefs groups branches, remote branches, and tags', () => {
   ]);
 });
 
+test('createGitHubCommitUrl supports common GitHub remote URL formats', () => {
+  assert.equal(
+    createGitHubCommitUrl('https://github.com/bitbearx/miniscm.git', 'abc123'),
+    'https://github.com/bitbearx/miniscm/commit/abc123'
+  );
+  assert.equal(
+    createGitHubCommitUrl('git@github.com:bitbearx/miniscm.git', 'abc123'),
+    'https://github.com/bitbearx/miniscm/commit/abc123'
+  );
+  assert.equal(
+    createGitHubCommitUrl('ssh://git@github.com/bitbearx/miniscm.git', 'abc123'),
+    'https://github.com/bitbearx/miniscm/commit/abc123'
+  );
+  assert.equal(createGitHubCommitUrl('https://gitlab.com/bitbearx/miniscm.git', 'abc123'), undefined);
+});
+
 test('getFileHistory reads real git history for a file', async () => {
   const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'miniscm-history-'));
   const filePath = path.join(repoRoot, 'src', 'hello.txt');
@@ -171,6 +189,61 @@ test('getFileHistory reads real git history for a file', async () => {
 
   const changedFiles = await getCommitFiles(repoRoot, history.commits[0].hash);
   assert.deepEqual(changedFiles, [{ status: 'M', path: 'src/hello.txt', oldPath: undefined }]);
+});
+
+test('getLineBlame reads commit details and GitHub URL for a specific line', async () => {
+  const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'miniscm-line-blame-'));
+  const filePath = path.join(repoRoot, 'story.txt');
+
+  await runGit(repoRoot, ['init']);
+  await runGit(repoRoot, ['config', 'user.email', 'tester@example.com']);
+  await runGit(repoRoot, ['config', 'user.name', 'Test User']);
+  await runGit(repoRoot, ['remote', 'add', 'origin', 'git@github.com:bitbearx/miniscm.git']);
+
+  await fs.writeFile(filePath, 'first\nsecond\n', 'utf8');
+  await runGit(repoRoot, ['add', '.']);
+  await runGitWithEnv(repoRoot, ['commit', '-m', 'Add story file'], {
+    GIT_AUTHOR_DATE: '2026-07-01T10:00:00+0800',
+    GIT_COMMITTER_DATE: '2026-07-01T10:00:00+0800'
+  });
+
+  await fs.writeFile(filePath, 'first\nsecond updated\n', 'utf8');
+  await runGit(repoRoot, ['add', '.']);
+  await runGitWithEnv(repoRoot, ['commit', '-m', 'Update second line', '-m', 'Explain why the second line changed.'], {
+    GIT_AUTHOR_DATE: '2026-07-02T11:12:13+0800',
+    GIT_COMMITTER_DATE: '2026-07-02T11:12:13+0800'
+  });
+  const secondCommitHash = (await runGit(repoRoot, ['rev-parse', 'HEAD'])).trim();
+
+  const blame = await getLineBlame(filePath, 2);
+
+  assert.equal(blame.author, 'Test User');
+  assert.equal(blame.authorDate, '2026-07-02T11:12:13+08:00');
+  assert.equal(blame.hash, secondCommitHash);
+  assert.equal(blame.shortHash, secondCommitHash.slice(0, 8));
+  assert.equal(blame.subject, 'Update second line');
+  assert.equal(blame.message, 'Update second line\n\nExplain why the second line changed.');
+  assert.equal(blame.githubUrl, `https://github.com/bitbearx/miniscm/commit/${secondCommitHash}`);
+});
+
+test('getLineBlame omits GitHub URL for uncommitted lines', async () => {
+  const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'miniscm-uncommitted-blame-'));
+  const filePath = path.join(repoRoot, 'draft.txt');
+
+  await runGit(repoRoot, ['init']);
+  await runGit(repoRoot, ['config', 'user.email', 'tester@example.com']);
+  await runGit(repoRoot, ['config', 'user.name', 'Test User']);
+  await runGit(repoRoot, ['remote', 'add', 'origin', 'git@github.com:bitbearx/miniscm.git']);
+  await fs.writeFile(filePath, 'committed\n', 'utf8');
+  await runGit(repoRoot, ['add', '.']);
+  await runGit(repoRoot, ['commit', '-m', 'Add draft file']);
+
+  await fs.writeFile(filePath, 'uncommitted\n', 'utf8');
+
+  const blame = await getLineBlame(filePath, 1);
+
+  assert.match(blame.hash, /^0+$/);
+  assert.equal(blame.githubUrl, undefined);
 });
 
 test('getFileHistory excludes merge commits by default', async () => {

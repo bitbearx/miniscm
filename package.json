@@ -2,7 +2,7 @@
   "name": "miniscm",
   "displayName": "%extension.displayName%",
   "description": "%extension.description%",
-  "version": "0.1.0",
+  "version": "0.1.2",
   "publisher": "bitbearx",
   "license": "MIT",
   "files": [
@@ -22,8 +22,10 @@
     "Source Control"
   ],
   "activationEvents": [
+    "onStartupFinished",
     "onCommand:miniscm.showFileHistory",
-    "onCommand:miniscm.compareFileWithRef"
+    "onCommand:miniscm.compareFileWithRef",
+    "onCommand:miniscm.openCommitDetails"
   ],
   "main": "./out/src/extension.js",
   "contributes": {
