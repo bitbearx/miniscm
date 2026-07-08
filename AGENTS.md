@@ -15,6 +15,7 @@
   - `extension.ts`：扩展入口，注册右键命令、Webview、diff 操作。
   - `gitHistory.ts`：Git 命令调用与提交历史解析。
   - `gitGraph.ts`：仓库 Git Graph 数据读取、ref 标记解析和 graph lane 布局。
+  - `gitBlobUri.ts`：Git blob 虚拟文档 URI 的生成与解析，保障 diff 文档可恢复并保留文件类型。
   - `blameStatus.ts`：当前行 Git Blame 状态栏和 tooltip 展示。
   - `changedFiles.ts`：变更文件列表排序工具。
   - `historyOptions.ts`：文件历史筛选选项的默认值与规范化逻辑。

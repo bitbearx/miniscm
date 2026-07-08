@@ -15,6 +15,7 @@ import {
   runGit
 } from './gitHistory';
 import { getRepositoryGraph } from './gitGraph';
+import { BLOB_SCHEME, EMPTY_REF, createGitBlobUriString, parseGitBlobUriEntry } from './gitBlobUri';
 import { createRepositoryGraphHtml } from './graphWebview';
 import { normalizeFileHistoryOptions } from './historyOptions';
 import { createI18n, type I18n } from './i18n';
@@ -22,9 +23,6 @@ import { createHistoryPanelOptions } from './panelOptions';
 import { createRefDiffDescriptor } from './refDiff';
 import { DEFAULT_FILE_HISTORY_OPTIONS, type ChangedFile, type FileHistoryOptions, type FileHistoryResult, type GitBlobEntry, type GitCommitDetails, type GitRef, type GitRefType, type RepositoryGraphResult } from './types';
 import { createCommitDetailsHtml, createHistoryHtml, type HistoryWebviewState } from './webview';
-
-const BLOB_SCHEME = 'miniscm-git';
-const EMPTY_REF = '__MINISCM_EMPTY__';
 
 /** QuickPick 中的 Git ref 选项。 */
 interface RefQuickPickItem extends vscode.QuickPickItem {
@@ -93,30 +91,22 @@ interface OpenGraphPanelState {
  * 为 VS Code diff 命令提供指定提交中的文件内容。
  */
 class GitBlobContentProvider implements vscode.TextDocumentContentProvider {
-  private readonly entries = new Map<string, GitBlobEntry>();
-  private sequence = 0;
-
   /**
    * 创建一个可被 VS Code 打开的虚拟文档 URI。
    * @param entry Git blob 的读取参数。
    * @returns 虚拟文档 URI。
    */
   createUri(entry: GitBlobEntry): vscode.Uri {
-    const id = String((this.sequence += 1));
-    this.entries.set(id, entry);
-    const safeLabel = encodeURIComponent(entry.label.replaceAll('/', '-'));
-    return vscode.Uri.parse(`${BLOB_SCHEME}:/${safeLabel}?id=${encodeURIComponent(id)}`);
+    return vscode.Uri.parse(createGitBlobUriString(entry));
   }
 
   /**
-   * 按 URI 中的 id 返回对应 Git blob 内容。
+   * 按 URI 中携带的读取参数返回对应 Git blob 内容。
    * @param uri 虚拟文档 URI。
    * @returns 文档内容。
    */
   async provideTextDocumentContent(uri: vscode.Uri): Promise<string> {
-    const params = new URLSearchParams(uri.query);
-    const id = params.get('id');
-    const entry = id ? this.entries.get(id) : undefined;
+    const entry = parseGitBlobUriEntry(uri.query);
 
     if (!entry || entry.ref === EMPTY_REF) {
       return '';
